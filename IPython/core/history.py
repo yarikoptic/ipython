@@ -15,6 +15,7 @@ from __future__ import print_function
 # Stdlib imports
 import atexit
 import datetime
+from io import open as io_open
 import os
 import re
 try:
@@ -24,6 +25,7 @@ except ImportError:
 import threading
 
 # Our own packages
+from IPython.core.error import StdinNotImplementedError
 from IPython.config.configurable import Configurable
 from IPython.external.decorator import decorator
 from IPython.testing.skipdoctest import skip_doctest
@@ -761,8 +763,10 @@ def magic_history(self, parameter_s = ''):
       the default is the last 10 lines.
 
       -f FILENAME: instead of printing the output to the screen, redirect it to
-       the given file.  The file is always overwritten, though IPython asks for
-       confirmation first if it already exists.
+       the given file.  The file is always overwritten, though *when it can*,
+       IPython asks for confirmation first. In particular, running the command
+       "history -f FILENAME" from the IPython Notebook interface will replace
+       FILENAME even if it already exists *without* confirmation.
 
     Examples
     --------
@@ -797,11 +801,15 @@ def magic_history(self, parameter_s = ''):
         close_at_end = False
     else:
         if os.path.exists(outfname):
-            if not io.ask_yes_no("File %r exists. Overwrite?" % outfname):
+            try:
+                ans = io.ask_yes_no("File %r exists. Overwrite?" % outfname)
+            except StdinNotImplementedError:
+                ans = True
+            if not ans:
                 print('Aborting.')
                 return
-
-        outfile = open(outfname,'w')
+            print("Overwriting file.")
+        outfile = io_open(outfname, 'w', encoding='utf-8')
         close_at_end = True
 
     print_nums = 'n' in opts
@@ -844,10 +852,10 @@ def magic_history(self, parameter_s = ''):
         multiline = "\n" in inline
         line_sep = '\n' if multiline else ' '
         if print_nums:
-            print('%s:%s' % (_format_lineno(session, lineno).rjust(width),
-                    line_sep),  file=outfile, end='')
+            print(u'%s:%s' % (_format_lineno(session, lineno).rjust(width),
+                    line_sep),  file=outfile, end=u'')
         if pyprompts:
-            print(">>> ", end="", file=outfile)
+            print(u">>> ", end=u"", file=outfile)
             if multiline:
                 inline = "\n... ".join(inline.splitlines()) + "\n..."
         print(inline, file=outfile)

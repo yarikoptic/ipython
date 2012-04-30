@@ -234,6 +234,19 @@ class TestView(ClusterTestCase):
         b = view.gather('a', block=True)
         assert_array_equal(b, a)
     
+    @skip_without('numpy')
+    def test_apply_numpy(self):
+        """view.apply(f, ndarray)"""
+        import numpy
+        from numpy.testing.utils import assert_array_equal, assert_array_almost_equal
+        
+        A = numpy.random.random((100,100))
+        view = self.client[-1]
+        for dt in [ 'int32', 'uint8', 'float32', 'float64' ]:
+            B = A.astype(dt)
+            C = view.apply_sync(lambda x:x, B)
+            assert_array_equal(B,C)
+    
     def test_map(self):
         view = self.client[:]
         def f(x):
@@ -469,4 +482,25 @@ class TestView(ClusterTestCase):
                 else:
                     raise e
     
+    def test_map_reference(self):
+        """view.map(<Reference>, *seqs) should work"""
+        v = self.client[:]
+        v.scatter('n', self.client.ids, flatten=True)
+        v.execute("f = lambda x,y: x*y")
+        rf = pmod.Reference('f')
+        nlist = list(range(10))
+        mlist = nlist[::-1]
+        expected = [ m*n for m,n in zip(mlist, nlist) ]
+        result = v.map_sync(rf, mlist, nlist)
+        self.assertEquals(result, expected)
+
+    def test_apply_reference(self):
+        """view.apply(<Reference>, *args) should work"""
+        v = self.client[:]
+        v.scatter('n', self.client.ids, flatten=True)
+        v.execute("f = lambda x: n*x")
+        rf = pmod.Reference('f')
+        result = v.apply_sync(rf, 5)
+        expected = [ 5*id for id in self.client.ids ]
+        self.assertEquals(result, expected)
 

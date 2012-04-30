@@ -155,8 +155,7 @@ class _PrettyPrinterBase(object):
         """like begin_group / end_group but for the with statement."""
         self.begin_group(indent, open)
         try:
-            with self.indent(indent):
-                yield
+            yield
         finally:
             self.end_group(indent, close)
 
@@ -347,7 +346,11 @@ class RepresentationPrinter(PrettyPrinter):
                         return printer(obj, self, cycle)
             # Finally look for special method names.
             if hasattr(obj_class, '_repr_pretty_'):
-                return obj_class._repr_pretty_(obj, self, cycle)
+                # Some objects automatically create any requested
+                # attribute. Try to ignore most of them by checking for
+                # callability.
+                if callable(obj_class._repr_pretty_):
+                    return obj_class._repr_pretty_(obj, self, cycle)
             return _default_pprint(obj, self, cycle)
         finally:
             self.end_group()
@@ -616,7 +619,7 @@ def _function_pprint(obj, p, cycle):
 
 def _exception_pprint(obj, p, cycle):
     """Base pprint for all exceptions."""
-    if obj.__class__.__module__ == 'exceptions':
+    if obj.__class__.__module__ in ('exceptions', 'builtins'):
         name = obj.__class__.__name__
     else:
         name = '%s.%s' % (
@@ -624,7 +627,7 @@ def _exception_pprint(obj, p, cycle):
             obj.__class__.__name__
         )
     step = len(name) + 1
-    p.begin_group(step, '(')
+    p.begin_group(step, name + '(')
     for idx, arg in enumerate(getattr(obj, 'args', ())):
         if idx:
             p.text(',')

@@ -430,7 +430,7 @@ class Hub(SessionFactory):
         """turn any valid targets argument into a list of integer ids"""
         if targets is None:
             # default to all
-            targets = self.ids
+            return self.ids
 
         if isinstance(targets, (int,str,unicode)):
             # only one target specified
@@ -457,7 +457,7 @@ class Hub(SessionFactory):
     def dispatch_monitor_traffic(self, msg):
         """all ME and Task queue messages come through here, as well as
         IOPub traffic."""
-        self.log.debug("monitor traffic: %r", msg[:2])
+        self.log.debug("monitor traffic: %r", msg[0])
         switch = msg[0]
         try:
             idents, msg = self.session.feed_identities(msg[1:])

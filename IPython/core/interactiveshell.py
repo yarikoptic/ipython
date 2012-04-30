@@ -1682,20 +1682,12 @@ class InteractiveShell(SingletonConfigurable, Magic):
         sys.last_traceback = last_traceback
 
         if filename and etype is SyntaxError:
-            # Work hard to stuff the correct filename in the exception
             try:
-                msg, (dummy_filename, lineno, offset, line) = value
+                value.filename = filename
             except:
                 # Not the format we expect; leave it alone
                 pass
-            else:
-                # Stuff in the right filename
-                try:
-                    # Assume SyntaxError is a class exception
-                    value = SyntaxError(msg, (filename, lineno, offset, line))
-                except:
-                    # If that failed, assume SyntaxError is a string
-                    value = msg, (filename, lineno, offset, line)
+        
         stb = self.SyntaxTB.structured_traceback(etype, value, [])
         self._showtraceback(etype, value, stb)
 
@@ -1953,7 +1945,7 @@ class InteractiveShell(SingletonConfigurable, Magic):
         # even need a centralize colors management object.
         self.magic_colors(self.colors)
         # History was moved to a separate module
-        from . import history
+        from IPython.core import history
         history.init_ipython(self)
 
     def magic(self, arg_s, next_input=None):
@@ -1978,14 +1970,9 @@ class InteractiveShell(SingletonConfigurable, Magic):
         if next_input:
             self.set_next_input(next_input)
 
-        args = arg_s.split(' ',1)
-        magic_name = args[0]
+        magic_name, _, magic_args = arg_s.partition(' ')
         magic_name = magic_name.lstrip(prefilter.ESC_MAGIC)
 
-        try:
-            magic_args = args[1]
-        except IndexError:
-            magic_args = ''
         fn = getattr(self,'magic_'+magic_name,None)
         if fn is None:
             error("Magic function `%s` not found." % magic_name)
@@ -2631,7 +2618,12 @@ class InteractiveShell(SingletonConfigurable, Magic):
         ns = self.user_ns.copy()
         ns.update(sys._getframe(depth+1).f_locals)
         ns.pop('self', None)
-        return formatter.format(cmd, **ns)
+        try:
+            cmd = formatter.format(cmd, **ns)
+        except Exception:
+            # if formatter couldn't format, just let it go untransformed
+            pass
+        return cmd
 
     def mktempfile(self, data=None, prefix='ipython_edit_'):
         """Make a new tempfile and return its filename.

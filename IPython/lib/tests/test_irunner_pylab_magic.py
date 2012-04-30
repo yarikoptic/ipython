@@ -15,6 +15,14 @@ import re
 from IPython.lib import irunner
 from IPython.testing import decorators
 
+def pylab_not_importable():
+    """Test if importing pylab fails with RuntimeError (true when having no display)"""
+    try:
+        import pylab
+        return False
+    except RuntimeError:
+        return True
+
 # Testing code begins
 class RunnerTestCase(unittest.TestCase):
 
@@ -58,6 +66,7 @@ class RunnerTestCase(unittest.TestCase):
                      mismatch)
 
     @decorators.skipif_not_matplotlib
+    @decorators.skipif(pylab_not_importable, "Likely a run without X.")
     def test_pylab_import_all_enabled(self):
         "Verify that plot is available when pylab_import_all = True"
         source = """
@@ -83,6 +92,7 @@ Out\[6\]: True
         self._test_runner(runner,source,output)
 
     @decorators.skipif_not_matplotlib
+    @decorators.skipif(pylab_not_importable, "Likely a run without X.")
     def test_pylab_import_all_disabled(self):
         "Verify that plot is not available when pylab_import_all = False"
         source = """

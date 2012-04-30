@@ -137,15 +137,19 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
     font_changed = QtCore.Signal(QtGui.QFont)
 
     #------ Protected class variables ------------------------------------------
-
+    
+    # control handles
+    _control = None
+    _page_control = None
+    _splitter = None
+    
     # When the control key is down, these keys are mapped.
     _ctrl_down_remap = { QtCore.Qt.Key_B : QtCore.Qt.Key_Left,
                          QtCore.Qt.Key_F : QtCore.Qt.Key_Right,
                          QtCore.Qt.Key_A : QtCore.Qt.Key_Home,
                          QtCore.Qt.Key_P : QtCore.Qt.Key_Up,
                          QtCore.Qt.Key_N : QtCore.Qt.Key_Down,
-                         QtCore.Qt.Key_H : QtCore.Qt.Key_Backspace,
-                         QtCore.Qt.Key_D : QtCore.Qt.Key_Delete, }
+                         QtCore.Qt.Key_H : QtCore.Qt.Key_Backspace, }
     if not sys.platform == 'darwin':
         # On OS X, Ctrl-E already does the right thing, whereas End moves the
         # cursor to the bottom of the buffer.
@@ -183,8 +187,6 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         layout = QtGui.QStackedLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self._control = self._create_control()
-        self._page_control = None
-        self._splitter = None
         if self.paging in ('hsplit', 'vsplit'):
             self._splitter = QtGui.QSplitter()
             if self.paging == 'hsplit':
@@ -1115,6 +1117,16 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
                 cursor.setPosition(position, QtGui.QTextCursor.KeepAnchor)
                 self._kill_ring.kill_cursor(cursor)
                 intercepted = True
+
+            elif key == QtCore.Qt.Key_D:
+                if len(self.input_buffer) == 0:
+                    self.exit_requested.emit(self)
+                else:
+                    new_event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress,
+                                                QtCore.Qt.Key_Delete,
+                                                QtCore.Qt.NoModifier)
+                    QtGui.qApp.sendEvent(self._control, new_event)
+                    intercepted = True
 
         #------ Alt modifier ---------------------------------------------------
 

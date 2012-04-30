@@ -41,9 +41,13 @@ from zmq.log import handlers
 
 # IPython imports
 from IPython.config.application import Application
+from IPython.utils import py3compat
 from IPython.utils.pickleutil import can, uncan, canSequence, uncanSequence
 from IPython.utils.newserialized import serialize, unserialize
 from IPython.zmq.log import EnginePUBHandler
+
+if py3compat.PY3:
+    buffer = memoryview
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -466,6 +470,10 @@ def local_logger(logname, loglevel=logging.DEBUG):
         return
     handler = logging.StreamHandler()
     handler.setLevel(loglevel)
+    formatter = logging.Formatter("%(asctime)s.%(msecs).03d [%(name)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S")
+    handler.setFormatter(formatter)
+
     logger.addHandler(handler)
     logger.setLevel(loglevel)
     return logger

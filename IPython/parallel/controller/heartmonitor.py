@@ -23,7 +23,7 @@ from zmq.devices import ThreadDevice
 from zmq.eventloop import ioloop, zmqstream
 
 from IPython.config.configurable import LoggingConfigurable
-from IPython.utils.traitlets import Set, Instance, CFloat
+from IPython.utils.traitlets import Set, Instance, CFloat, Integer
 
 from IPython.parallel.util import asbytes
 
@@ -40,6 +40,10 @@ class Heart(object):
     id=None
     def __init__(self, in_addr, out_addr, in_type=zmq.SUB, out_type=zmq.DEALER, heart_id=None):
         self.device = ThreadDevice(zmq.FORWARDER, in_type, out_type)
+        # do not allow the device to share global Context.instance,
+        # which is the default behavior in pyzmq > 2.1.10
+        self.device.context_factory = zmq.Context
+        
         self.device.daemon=True
         self.device.connect_in(in_addr)
         self.device.connect_out(out_addr)
@@ -60,7 +64,7 @@ class HeartMonitor(LoggingConfigurable):
     pongstream: an XREP stream
     period: the period of the heartbeat in milliseconds"""
 
-    period=CFloat(1000, config=True,
+    period = Integer(3000, config=True,
         help='The frequency at which the Hub pings the engines for heartbeats '
         '(in ms)',
     )
@@ -120,6 +124,8 @@ class HeartMonitor(LoggingConfigurable):
         # print self.on_probation, self.hearts
         # self.log.debug("heartbeat::beat %.3f, %i beating hearts", self.lifetime, len(self.hearts))
         self.pingstream.send(asbytes(str(self.lifetime)))
+        # flush stream to force immediate socket send
+        self.pingstream.flush()
 
     def handle_new_heart(self, heart):
         if self._new_handlers:
