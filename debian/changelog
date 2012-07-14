@@ -1,3 +1,9 @@
+ipython01x (0.13-1) neurodebian; urgency=low
+
+  * 0.13 release non-official Debian package
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 13 Jul 2012 21:55:15 -0400
+
 ipython01x (0.12.1-1) neurodebian; urgency=low
 
   * 0.12.1 release non-official Debian package
