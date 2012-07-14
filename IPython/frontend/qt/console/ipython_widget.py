@@ -179,7 +179,6 @@ class IPythonWidget(FrontendWidget):
         """ Implemented to handle history tail replies, which are only supported
             by the IPython kernel.
         """
-        self.log.debug("history: %s", msg.get('content', ''))
         content = msg['content']
         if 'history' not in content:
             self.log.error("History request failed: %r"%content)
@@ -199,6 +198,7 @@ class IPythonWidget(FrontendWidget):
         # reset retry flag
         self._retrying_history_request = False
         history_items = content['history']
+        self.log.debug("Received history reply with %i entries", len(history_items))
         items = []
         last_cell = u""
         for _, _, cell in history_items:
@@ -214,7 +214,7 @@ class IPythonWidget(FrontendWidget):
         self.log.debug("pyout: %s", msg.get('content', ''))
         if not self._hidden and self._is_from_this_session(msg):
             content = msg['content']
-            prompt_number = content['execution_count']
+            prompt_number = content.get('execution_count', 0)
             data = content['data']
             if data.has_key('text/html'):
                 self._append_plain_text(self.output_sep, True)
@@ -255,11 +255,27 @@ class IPythonWidget(FrontendWidget):
             self._append_plain_text(u'\n', True)
 
     def _started_channels(self):
-        """ Reimplemented to make a history request.
-        """
+        """Reimplemented to make a history request and load %guiref."""
         super(IPythonWidget, self)._started_channels()
+        self._load_guiref_magic()
         self.kernel_manager.shell_channel.history(hist_access_type='tail',
                                                   n=1000)
+    
+    def _started_kernel(self):
+        """Load %guiref when the kernel starts (if channels are also started).
+        
+        Principally triggered by kernel restart.
+        """
+        if self.kernel_manager.shell_channel is not None:
+            self._load_guiref_magic()
+    
+    def _load_guiref_magic(self):
+        """Load %guiref magic."""
+        self.kernel_manager.shell_channel.execute('\n'.join([
+            "from IPython.core import usage",
+            "get_ipython().register_magic_function(usage.page_guiref, 'line', 'guiref')",
+        ]), silent=True)
+        
     #---------------------------------------------------------------------------
     # 'ConsoleWidget' public interface
     #---------------------------------------------------------------------------

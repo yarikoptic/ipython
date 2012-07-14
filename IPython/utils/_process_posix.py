@@ -26,6 +26,7 @@ from .autoattr import auto_attr
 from ._process_common import getoutput, arg_split
 from IPython.utils import text
 from IPython.utils import py3compat
+from IPython.utils.encoding import DEFAULT_ENCODING
 
 #-----------------------------------------------------------------------------
 # Function definitions
@@ -35,7 +36,7 @@ def _find_cmd(cmd):
     """Find the full path to a command using which."""
 
     path = sp.Popen(['/usr/bin/env', 'which', cmd],
-                    stdout=sp.PIPE).communicate()[0]
+                    stdout=sp.PIPE, stderr=sp.PIPE).communicate()[0]
     return py3compat.bytes_to_str(path)
 
 
@@ -128,7 +129,7 @@ class ProcessHandler(object):
         int : child's exitstatus
         """
         # Get likely encoding for the output.
-        enc = text.getdefaultencoding()
+        enc = DEFAULT_ENCODING
         
         # Patterns to match on the output, for pexpect.  We read input and
         # allow either a short timeout or EOF

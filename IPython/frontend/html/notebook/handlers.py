@@ -30,6 +30,7 @@ from zmq.utils import jsonapi
 from IPython.external.decorator import decorator
 from IPython.zmq.session import Session
 from IPython.lib.security import passwd_check
+from IPython.utils.jsonutil import date_default
 
 try:
     from docutils.core import publish_string
@@ -108,6 +109,7 @@ def authenticate_unless_readonly(f, self, *args, **kwargs):
     @web.authenticated
     def auth_f(self, *args, **kwargs):
         return f(self, *args, **kwargs)
+
     if self.application.read_only:
         return f(self, *args, **kwargs)
     else:
@@ -167,12 +169,23 @@ class AuthenticatedHandler(RequestHandler):
     @property
     def ws_url(self):
         """websocket url matching the current request
-        
+
         turns http[s]://host[:port] into
                 ws[s]://host[:port]
         """
         proto = self.request.protocol.replace('http', 'ws')
-        return "%s://%s" % (proto, self.request.host)
+        host = self.application.ipython_app.websocket_host # default to config value
+        if host == '':
+            host = self.request.host # get from request
+        return "%s://%s" % (proto, host)
+
+
+class AuthenticatedFileHandler(AuthenticatedHandler, web.StaticFileHandler):
+    """static files should only be accessible when logged in"""
+
+    @authenticate_unless_readonly
+    def get(self, path):
+        return web.StaticFileHandler.get(self, path)
 
 
 class ProjectDashboardHandler(AuthenticatedHandler):
@@ -183,7 +196,8 @@ class ProjectDashboardHandler(AuthenticatedHandler):
         project = nbm.notebook_dir
         self.render(
             'projectdashboard.html', project=project,
-            base_project_url=u'/', base_kernel_url=u'/',
+            base_project_url=self.application.ipython_app.base_project_url,
+            base_kernel_url=self.application.ipython_app.base_kernel_url,
             read_only=self.read_only,
             logged_in=self.logged_in,
             login_available=self.login_available
@@ -198,6 +212,7 @@ class LoginHandler(AuthenticatedHandler):
                 read_only=self.read_only,
                 logged_in=self.logged_in,
                 login_available=self.login_available,
+                base_project_url=self.application.ipython_app.base_project_url,
                 message=message
         )
 
@@ -233,6 +248,7 @@ class LogoutHandler(AuthenticatedHandler):
                     read_only=self.read_only,
                     logged_in=self.logged_in,
                     login_available=self.login_available,
+                    base_project_url=self.application.ipython_app.base_project_url,
                     message=message)
 
 
@@ -246,7 +262,8 @@ class NewHandler(AuthenticatedHandler):
         self.render(
             'notebook.html', project=project,
             notebook_id=notebook_id,
-            base_project_url=u'/', base_kernel_url=u'/',
+            base_project_url=self.application.ipython_app.base_project_url,
+            base_kernel_url=self.application.ipython_app.base_kernel_url,
             kill_kernel=False,
             read_only=False,
             logged_in=self.logged_in,
@@ -267,7 +284,8 @@ class NamedNotebookHandler(AuthenticatedHandler):
         self.render(
             'notebook.html', project=project,
             notebook_id=notebook_id,
-            base_project_url=u'/', base_kernel_url=u'/',
+            base_project_url=self.application.ipython_app.base_project_url,
+            base_kernel_url=self.application.ipython_app.base_kernel_url,
             kill_kernel=False,
             read_only=self.read_only,
             logged_in=self.logged_in,
@@ -275,6 +293,27 @@ class NamedNotebookHandler(AuthenticatedHandler):
             mathjax_url=self.application.ipython_app.mathjax_url,
         )
 
+
+class PrintNotebookHandler(AuthenticatedHandler):
+
+    @authenticate_unless_readonly
+    def get(self, notebook_id):
+        nbm = self.application.notebook_manager
+        project = nbm.notebook_dir
+        if not nbm.notebook_exists(notebook_id):
+            raise web.HTTPError(404, u'Notebook does not exist: %s' % notebook_id)
+        
+        self.render(
+            'printnotebook.html', project=project,
+            notebook_id=notebook_id,
+            base_project_url=self.application.ipython_app.base_project_url,
+            base_kernel_url=self.application.ipython_app.base_kernel_url,
+            kill_kernel=False,
+            read_only=self.read_only,
+            logged_in=self.logged_in,
+            login_available=self.login_available,
+            mathjax_url=self.application.ipython_app.mathjax_url,
+        )
 
 #-----------------------------------------------------------------------------
 # Kernel handlers
@@ -291,8 +330,9 @@ class MainKernelHandler(AuthenticatedHandler):
     @web.authenticated
     def post(self):
         km = self.application.kernel_manager
+        nbm = self.application.notebook_manager
         notebook_id = self.get_argument('notebook', default=None)
-        kernel_id = km.start_kernel(notebook_id)
+        kernel_id = km.start_kernel(notebook_id, cwd=nbm.notebook_dir)
         data = {'ws_url':self.ws_url,'kernel_id':kernel_id}
         self.set_header('Location', '/'+kernel_id)
         self.finish(jsonapi.dumps(data))
@@ -305,7 +345,7 @@ class KernelHandler(AuthenticatedHandler):
     @web.authenticated
     def delete(self, kernel_id):
         km = self.application.kernel_manager
-        km.kill_kernel(kernel_id)
+        km.shutdown_kernel(kernel_id)
         self.set_status(204)
         self.finish()
 
@@ -347,13 +387,13 @@ class ZMQStreamHandler(websocket.WebSocketHandler):
         except KeyError:
             pass
         msg.pop('buffers')
-        return jsonapi.dumps(msg)
+        return jsonapi.dumps(msg, default=date_default)
 
     def _on_zmq_reply(self, msg_list):
         try:
             msg = self._reserialize_reply(msg_list)
-        except:
-            self.application.log.critical("Malformed message: %r" % msg_list)
+        except Exception:
+            self.application.log.critical("Malformed message: %r" % msg_list, exc_info=True)
         else:
             self.write_message(msg)
 
@@ -551,9 +591,11 @@ class NotebookRootHandler(AuthenticatedHandler):
 
     @authenticate_unless_readonly
     def get(self):
-        
         nbm = self.application.notebook_manager
+        km = self.application.kernel_manager
         files = nbm.list_notebooks()
+        for f in files :
+            f['kernel_id'] = km.kernel_for_notebook(f['notebook_id'])
         self.finish(jsonapi.dumps(files))
 
     @web.authenticated
@@ -604,6 +646,64 @@ class NotebookHandler(AuthenticatedHandler):
         nbm.delete_notebook(notebook_id)
         self.set_status(204)
         self.finish()
+
+
+class NotebookCopyHandler(AuthenticatedHandler):
+
+    @web.authenticated
+    def get(self, notebook_id):
+        nbm = self.application.notebook_manager
+        project = nbm.notebook_dir
+        notebook_id = nbm.copy_notebook(notebook_id)
+        self.render(
+            'notebook.html', project=project,
+            notebook_id=notebook_id,
+            base_project_url=self.application.ipython_app.base_project_url,
+            base_kernel_url=self.application.ipython_app.base_kernel_url,
+            kill_kernel=False,
+            read_only=False,
+            logged_in=self.logged_in,
+            login_available=self.login_available,
+            mathjax_url=self.application.ipython_app.mathjax_url,
+        )
+
+
+#-----------------------------------------------------------------------------
+# Cluster handlers
+#-----------------------------------------------------------------------------
+
+
+class MainClusterHandler(AuthenticatedHandler):
+
+    @web.authenticated
+    def get(self):
+        cm = self.application.cluster_manager
+        self.finish(jsonapi.dumps(cm.list_profiles()))
+
+
+class ClusterProfileHandler(AuthenticatedHandler):
+
+    @web.authenticated
+    def get(self, profile):
+        cm = self.application.cluster_manager
+        self.finish(jsonapi.dumps(cm.profile_info(profile)))
+
+
+class ClusterActionHandler(AuthenticatedHandler):
+
+    @web.authenticated
+    def post(self, profile, action):
+        cm = self.application.cluster_manager
+        if action == 'start':
+            n = self.get_argument('n',default=None)
+            if n is None:
+                data = cm.start_cluster(profile)
+            else:
+                data = cm.start_cluster(profile,int(n))
+        if action == 'stop':
+            data = cm.stop_cluster(profile)
+        self.finish(jsonapi.dumps(data))
+
 
 #-----------------------------------------------------------------------------
 # RST web service handlers

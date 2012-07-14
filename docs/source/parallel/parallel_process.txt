@@ -68,13 +68,13 @@ hosts ``host1``-``hostn``. The following steps are then required:
    (:file:`ipcontroller-engine.json`) is located.
 
 At this point, the controller and engines will be connected. By default, the JSON files
-created by the controller are put into the :file:`~/.ipython/profile_default/security`
+created by the controller are put into the :file:`IPYTHONDIR/profile_default/security`
 directory. If the engines share a filesystem with the controller, step 2 can be skipped as
 the engines will automatically look at that location.
 
 The final step required to actually use the running controller from a client is to move
 the JSON file :file:`ipcontroller-client.json` from ``host0`` to any host where clients
-will be run. If these file are put into the :file:`~/.ipython/profile_default/security`
+will be run. If these file are put into the :file:`IPYTHONDIR/profile_default/security`
 directory of the client's host, they will be found automatically. Otherwise, the full path
 to them has to be passed to the client's constructor.
 
@@ -97,7 +97,7 @@ controller and engines in the following situations:
 .. note::
 
     Currently :command:`ipcluster` requires that the
-    :file:`~/.ipython/profile_<name>/security` directory live on a shared filesystem that is
+    :file:`IPYTHONDIR/profile_<name>/security` directory live on a shared filesystem that is
     seen by both the controller and engines. If you don't have a shared file
     system you will need to use :command:`ipcontroller` and
     :command:`ipengine` directly.
@@ -403,13 +403,6 @@ The controller's remote location and configuration can be specified:
     # in the location specified by the `profile-dir` argument.
     # c.SSHControllerLauncher.controller_args = ['--reuse', '--ip=*', '--profile-dir=/path/to/cd']
 
-.. note::
-
-    SSH mode does not do any file movement, so you will need to distribute configuration
-    files manually.  To aid in this, the `reuse_files` flag defaults to True for ssh-launched
-    Controllers, so you will only need to do this once, unless you override this flag back
-    to False.
-
 Engines are specified in a dictionary, by hostname and the number of engines to be run
 on that host.
 
@@ -434,11 +427,27 @@ a single location:
 
 Current limitations of the SSH mode of :command:`ipcluster` are:
 
-* Untested on Windows. Would require a working :command:`ssh` on Windows.
-  Also, we are using shell scripts to setup and execute commands on remote
-  hosts.
-* No file movement - This is a regression from 0.10, which moved connection files
-  around with scp. This will be improved, Pull Requests are welcome.
+* Untested and unsupported on Windows.  Would require a working :command:`ssh` on Windows.
+  Also, we are using shell scripts to setup and execute commands on remote hosts.
+
+
+Moving files with SSH
+*********************
+
+SSH launchers will try to move connection files, controlled by the ``to_send`` and
+``to_fetch`` configurables.  If your machines are on a shared filesystem, this step is
+unnecessary, and can be skipped by setting these to empty lists:
+
+.. sourcecode:: python
+
+    c.SSHLauncher.to_send = []
+    c.SSHLauncher.to_fetch = []
+
+If our default guesses about paths don't work for you, or other files 
+should be moved, you can manually specify these lists as tuples of (local_path, 
+remote_path) for to_send, and (remote_path, local_path) for to_fetch.  If you do
+specify these lists explicitly, IPython *will not* automatically send connection files,
+so you must include this yourself if they should still be sent/retrieved.
 
 
 IPython on EC2 with StarCluster
@@ -477,7 +486,7 @@ the command::
     $ ipengine
 
 The engines should start and automatically connect to the controller using the
-JSON files in :file:`~/.ipython/profile_default/security`. You are now ready to use the
+JSON files in :file:`IPYTHONDIR/profile_default/security`. You are now ready to use the
 controller and engines from IPython.
 
 .. warning:: 
@@ -510,7 +519,7 @@ slightly more complicated, but the underlying ideas are the same:
         # in ipcontroller_config.py
         HubFactory.ip = '192.168.1.16'
 
-2. Copy :file:`ipcontroller-engine.json` from :file:`~/.ipython/profile_<name>/security` on
+2. Copy :file:`ipcontroller-engine.json` from :file:`IPYTHONDIR/profile_<name>/security` on
    the controller's host to the host where the engines will run.
 3. Use :command:`ipengine` on the engine's hosts to start the engines.
 
@@ -518,7 +527,7 @@ The only thing you have to be careful of is to tell :command:`ipengine` where
 the :file:`ipcontroller-engine.json` file is located. There are two ways you
 can do this:
 
-* Put :file:`ipcontroller-engine.json` in the :file:`~/.ipython/profile_<name>/security`
+* Put :file:`ipcontroller-engine.json` in the :file:`IPYTHONDIR/profile_<name>/security`
   directory on the engine's host, where it will be found automatically.
 * Call :command:`ipengine` with the ``--file=full_path_to_the_file``
   flag.
@@ -530,7 +539,7 @@ The ``file`` flag works like this::
 .. note::
     
     If the controller's and engine's hosts all have a shared file system  
-    (:file:`~/.ipython/profile_<name>/security` is the same on all of them), then things
+    (:file:`IPYTHONDIR/profile_<name>/security` is the same on all of them), then things
     will just work!
 
 SSH Tunnels
@@ -622,7 +631,7 @@ A couple of notes:
   then you need not specify its path directly, only the profile (assumes the path exists,
   otherwise you must create it first)::
 
-    [engine.host.n] $ scp controller.host:.ipython/profile_default/security/ipcontroller-engine.json ~/.ipython/profile_ssh/security/
+    [engine.host.n] $ scp controller.host:.ipython/profile_default/security/ipcontroller-engine.json ~/.config/ipython/profile_ssh/security/
     [engine.host.n] $ ipengine --profile=ssh
 
   Of course, if you fetch the file into the default profile, no arguments must be passed to
@@ -664,7 +673,7 @@ Log files
 
 All of the components of IPython have log files associated with them.
 These log files can be extremely useful in debugging problems with
-IPython and can be found in the directory :file:`~/.ipython/profile_<name>/log`.
+IPython and can be found in the directory :file:`IPYTHONDIR/profile_<name>/log`.
 Sending the log files to us will often help us to debug any problems.
 
 
@@ -762,6 +771,10 @@ To use one of these backends, you must set the :attr:`HubFactory.db_class` trait
     
     # and SQLite:
     c.HubFactory.db_class = 'IPython.parallel.controller.sqlitedb.SQLiteDB'
+    
+    # You can use NoDB to disable the database altogether, in case you don't need
+    # to reuse tasks or results, and want to keep memory consumption under control.
+    c.HubFactory.db_class = 'IPython.parallel.controller.dictdb.NoDB'
 
 When using the proper databases, you can actually allow for tasks to persist from
 one session to the next by specifying the MongoDB database or SQLite table in
@@ -788,6 +801,22 @@ you can specify any arguments you may need to the PyMongo `Connection
     
     # keyword args to pymongo.Connection
     c.MongoDB.connection_kwargs = {}
+
+But sometimes you are moving lots of data around quickly, and you don't need
+that information to be stored for later access, even by other Clients to this
+same session. For this case, we have a dummy database, which doesn't actually
+store anything. This lets the Hub stay small in memory, at the obvious expense
+of being able to access the information that would have been stored in the
+database (used for task resubmission, requesting results of tasks you didn't
+submit, etc.). To use this backend, simply pass ``--nodb`` to
+:command:`ipcontroller` on the command-line, or specify the :class:`NoDB` class
+in your :file:`ipcontroller_config.py` as described above.
+
+
+.. seealso::
+
+    For more information on the database backends, see the :ref:`db backend reference <parallel_db>`.
+
 
 .. _PyMongo: http://api.mongodb.org/python/1.9/
 

@@ -15,12 +15,33 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
+from __future__ import print_function
+
+import sys
 import time
+from datetime import datetime
 
 from zmq import MessageTracker
 
+from IPython.core.display import clear_output, display, display_pretty
 from IPython.external.decorator import decorator
 from IPython.parallel import error
+
+#-----------------------------------------------------------------------------
+# Functions
+#-----------------------------------------------------------------------------
+
+def _total_seconds(td):
+    """timedelta.total_seconds was added in 2.7"""
+    try:
+        # Python >= 2.7
+        return td.total_seconds()
+    except AttributeError:
+        # Python 2.6
+        return 1e-6 * (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6)
+
+def _raw_text(s):
+    display_pretty(s, raw=True)
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -137,6 +158,8 @@ class AsyncResult(object):
                 self._success = True
             finally:
                 self._metadata = map(self._client.metadata.get, self.msg_ids)
+                self._wait_for_outputs(10)
+            
 
 
     def successful(self):
@@ -195,7 +218,7 @@ class AsyncResult(object):
     def abort(self):
         """abort my tasks."""
         assert not self.ready(), "Can't abort, I am already done!"
-        return self.client.abort(self.msg_ids, targets=self._targets, block=True)
+        return self._client.abort(self.msg_ids, targets=self._targets, block=True)
 
     @property
     def sent(self):
@@ -255,7 +278,271 @@ class AsyncResult(object):
             # already done
             for r in rlist:
                 yield r
-
+    
+    def __len__(self):
+        return len(self.msg_ids)
+    
+    #-------------------------------------
+    # Sugar methods and attributes
+    #-------------------------------------
+    
+    def timedelta(self, start, end, start_key=min, end_key=max):
+        """compute the difference between two sets of timestamps
+        
+        The default behavior is to use the earliest of the first
+        and the latest of the second list, but this can be changed
+        by passing a different
+        
+        Parameters
+        ----------
+        
+        start : one or more datetime objects (e.g. ar.submitted)
+        end : one or more datetime objects (e.g. ar.received)
+        start_key : callable
+            Function to call on `start` to extract the relevant
+            entry [defalt: min]
+        end_key : callable
+            Function to call on `end` to extract the relevant
+            entry [default: max]
+        
+        Returns
+        -------
+        
+        dt : float
+            The time elapsed (in seconds) between the two selected timestamps.
+        """
+        if not isinstance(start, datetime):
+            # handle single_result AsyncResults, where ar.stamp is single object,
+            # not a list
+            start = start_key(start)
+        if not isinstance(end, datetime):
+            # handle single_result AsyncResults, where ar.stamp is single object,
+            # not a list
+            end = end_key(end)
+        return _total_seconds(end - start)
+        
+    @property
+    def progress(self):
+        """the number of tasks which have been completed at this point.
+        
+        Fractional progress would be given by 1.0 * ar.progress / len(ar)
+        """
+        self.wait(0)
+        return len(self) - len(set(self.msg_ids).intersection(self._client.outstanding))
+    
+    @property
+    def elapsed(self):
+        """elapsed time since initial submission"""
+        if self.ready():
+            return self.wall_time
+        
+        now = submitted = datetime.now()
+        for msg_id in self.msg_ids:
+            if msg_id in self._client.metadata:
+                stamp = self._client.metadata[msg_id]['submitted']
+                if stamp and stamp < submitted:
+                    submitted = stamp
+        return _total_seconds(now-submitted)
+    
+    @property
+    @check_ready
+    def serial_time(self):
+        """serial computation time of a parallel calculation
+        
+        Computed as the sum of (completed-started) of each task
+        """
+        t = 0
+        for md in self._metadata:
+            t += _total_seconds(md['completed'] - md['started'])
+        return t
+    
+    @property
+    @check_ready
+    def wall_time(self):
+        """actual computation time of a parallel calculation
+        
+        Computed as the time between the latest `received` stamp
+        and the earliest `submitted`.
+        
+        Only reliable if Client was spinning/waiting when the task finished, because
+        the `received` timestamp is created when a result is pulled off of the zmq queue,
+        which happens as a result of `client.spin()`.
+        
+        For similar comparison of other timestamp pairs, check out AsyncResult.timedelta.
+        
+        """
+        return self.timedelta(self.submitted, self.received)
+    
+    def wait_interactive(self, interval=1., timeout=None):
+        """interactive wait, printing progress at regular intervals"""
+        N = len(self)
+        tic = time.time()
+        while not self.ready() and (timeout is None or time.time() - tic <= timeout):
+            self.wait(interval)
+            clear_output()
+            print("%4i/%i tasks finished after %4i s" % (self.progress, N, self.elapsed), end="")
+            sys.stdout.flush()
+        print()
+        print("done")
+    
+    def _republish_displaypub(self, content, eid):
+        """republish individual displaypub content dicts"""
+        try:
+            ip = get_ipython()
+        except NameError:
+            # displaypub is meaningless outside IPython
+            return
+        md = content['metadata'] or {}
+        md['engine'] = eid
+        ip.display_pub.publish(content['source'], content['data'], md)
+    
+    def _display_stream(self, text, prefix='', file=None):
+        if not text:
+            # nothing to display
+            return
+        if file is None:
+            file = sys.stdout
+        end = '' if text.endswith('\n') else '\n'
+        
+        multiline = text.count('\n') > int(text.endswith('\n'))
+        if prefix and multiline and not text.startswith('\n'):
+            prefix = prefix + '\n'
+        print("%s%s" % (prefix, text), file=file, end=end)
+        
+    
+    def _display_single_result(self):
+        self._display_stream(self.stdout)
+        self._display_stream(self.stderr, file=sys.stderr)
+        
+        try:
+            get_ipython()
+        except NameError:
+            # displaypub is meaningless outside IPython
+            return
+        
+        for output in self.outputs:
+            self._republish_displaypub(output, self.engine_id)
+        
+        if self.pyout is not None:
+            display(self.get())
+    
+    def _wait_for_outputs(self, timeout=-1):
+        """wait for the 'status=idle' message that indicates we have all outputs
+        """
+        if not self._success:
+            # don't wait on errors
+            return
+        tic = time.time()
+        while not all(md['outputs_ready'] for md in self._metadata):
+            time.sleep(0.01)
+            self._client._flush_iopub(self._client._iopub_socket)
+            if timeout >= 0 and time.time() > tic + timeout:
+                break
+    
+    @check_ready
+    def display_outputs(self, groupby="type"):
+        """republish the outputs of the computation
+        
+        Parameters
+        ----------
+        
+        groupby : str [default: type]
+            if 'type':
+                Group outputs by type (show all stdout, then all stderr, etc.):
+                
+                [stdout:1] foo
+                [stdout:2] foo
+                [stderr:1] bar
+                [stderr:2] bar
+            if 'engine':
+                Display outputs for each engine before moving on to the next:
+                
+                [stdout:1] foo
+                [stderr:1] bar
+                [stdout:2] foo
+                [stderr:2] bar
+                
+            if 'order':
+                Like 'type', but further collate individual displaypub
+                outputs.  This is meant for cases of each command producing
+                several plots, and you would like to see all of the first
+                plots together, then all of the second plots, and so on.
+        """
+        if self._single_result:
+            self._display_single_result()
+            return
+        
+        stdouts = self.stdout
+        stderrs = self.stderr
+        pyouts  = self.pyout
+        output_lists = self.outputs
+        results = self.get()
+        
+        targets = self.engine_id
+        
+        if groupby == "engine":
+            for eid,stdout,stderr,outputs,r,pyout in zip(
+                    targets, stdouts, stderrs, output_lists, results, pyouts
+                ):
+                self._display_stream(stdout, '[stdout:%i] ' % eid)
+                self._display_stream(stderr, '[stderr:%i] ' % eid, file=sys.stderr)
+                
+                try:
+                    get_ipython()
+                except NameError:
+                    # displaypub is meaningless outside IPython
+                    return 
+                
+                if outputs or pyout is not None:
+                    _raw_text('[output:%i]' % eid)
+                
+                for output in outputs:
+                    self._republish_displaypub(output, eid)
+                
+                if pyout is not None:
+                    display(r)
+        
+        elif groupby in ('type', 'order'):
+            # republish stdout:
+            for eid,stdout in zip(targets, stdouts):
+                self._display_stream(stdout, '[stdout:%i] ' % eid)
+        
+            # republish stderr:
+            for eid,stderr in zip(targets, stderrs):
+                self._display_stream(stderr, '[stderr:%i] ' % eid, file=sys.stderr)
+        
+            try:
+                get_ipython()
+            except NameError:
+                # displaypub is meaningless outside IPython
+                return
+            
+            if groupby == 'order':
+                output_dict = dict((eid, outputs) for eid,outputs in zip(targets, output_lists))
+                N = max(len(outputs) for outputs in output_lists)
+                for i in range(N):
+                    for eid in targets:
+                        outputs = output_dict[eid]
+                        if len(outputs) >= N:
+                            _raw_text('[output:%i]' % eid)
+                            self._republish_displaypub(outputs[i], eid)
+            else:
+                # republish displaypub output
+                for eid,outputs in zip(targets, output_lists):
+                    if outputs:
+                        _raw_text('[output:%i]' % eid)
+                    for output in outputs:
+                        self._republish_displaypub(output, eid)
+        
+            # finally, add pyout:
+            for eid,r,pyout in zip(targets, results, pyouts):
+                if pyout is not None:
+                    display(r)
+        
+        else:
+            raise ValueError("groupby must be one of 'type', 'engine', 'collate', not %r" % groupby)
+        
+        
 
 
 class AsyncMapResult(AsyncResult):
@@ -345,7 +632,6 @@ class AsyncMapResult(AsyncResult):
                 yield r
 
 
-
 class AsyncHubResult(AsyncResult):
     """Class to wrap pending results that must be requested from the Hub.
 
@@ -353,6 +639,10 @@ class AsyncHubResult(AsyncResult):
     so use `AsyncHubResult.wait()` sparingly.
     """
 
+    def _wait_for_outputs(self, timeout=None):
+        """no-op, because HubResults are never incomplete"""
+        return
+    
     def wait(self, timeout=-1):
         """wait for result to complete."""
         start = time.time()

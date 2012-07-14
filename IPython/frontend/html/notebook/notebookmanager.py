@@ -26,7 +26,7 @@ from tornado import web
 
 from IPython.config.configurable import LoggingConfigurable
 from IPython.nbformat import current
-from IPython.utils.traitlets import Unicode, List, Dict, Bool
+from IPython.utils.traitlets import Unicode, List, Dict, Bool, TraitError
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -34,14 +34,24 @@ from IPython.utils.traitlets import Unicode, List, Dict, Bool
 
 class NotebookManager(LoggingConfigurable):
 
-    notebook_dir = Unicode(os.getcwd(), config=True, help="""
+    notebook_dir = Unicode(os.getcwdu(), config=True, help="""
         The directory to use for notebooks.
     """)
+    def _notebook_dir_changed(self, name, old, new):
+        """do a bit of validation of the notebook dir"""
+        if os.path.exists(new) and not os.path.isdir(new):
+            raise TraitError("notebook dir %r is not a directory" % new)
+        if not os.path.exists(new):
+            self.log.info("Creating notebook dir %s", new)
+            try:
+                os.mkdir(new)
+            except:
+                raise TraitError("Couldn't create notebook dir %r" % new)
     
     save_script = Bool(False, config=True,
         help="""Automatically create a Python script when saving the notebook.
         
-        For easier use of import, %run and %loadpy across notebooks, a
+        For easier use of import, %run and %load across notebooks, a
         <notebook-name>.py script will be created next to any
         <notebook-name>.ipynb on each save.  This can also be set with the
         short `--script` flag.
@@ -151,8 +161,8 @@ class NotebookManager(LoggingConfigurable):
                 nb = current.reads(s, u'json')
             except:
                 raise web.HTTPError(500, u'Unreadable JSON notebook.')
-        if 'name' not in nb:
-            nb.name = os.path.split(path)[-1].split(u'.')[0]
+        # Always use the filename as the notebook name.
+        nb.metadata.name = os.path.splitext(os.path.basename(path))[0]
         return last_modified, nb
 
     def save_new_notebook(self, data, name=None, format=u'json'):
@@ -228,6 +238,7 @@ class NotebookManager(LoggingConfigurable):
                     os.unlink(old_pypath)
             self.mapping[notebook_id] = new_name
             self.rev_mapping[new_name] = notebook_id
+            del self.rev_mapping[old_name]
 
     def delete_notebook(self, notebook_id):
         """Delete notebook by notebook_id."""
@@ -237,16 +248,26 @@ class NotebookManager(LoggingConfigurable):
         os.unlink(path)
         self.delete_notebook_id(notebook_id)
 
-    def new_notebook(self):
-        """Create a new notebook and returns its notebook_id."""
+    def increment_filename(self, basename):
+        """Return a non-used filename of the form basename<int>.
+        
+        This searches through the filenames (basename0, basename1, ...)
+        until is find one that is not already being used. It is used to
+        create Untitled and Copy names that are unique.
+        """
         i = 0
         while True:
-            name = u'Untitled%i' % i
+            name = u'%s%i' % (basename,i)
             path = self.get_path_by_name(name)
             if not os.path.isfile(path):
                 break
             else:
                 i = i+1
+        return path, name
+
+    def new_notebook(self):
+        """Create a new notebook and return its notebook_id."""
+        path, name = self.increment_filename('Untitled')
         notebook_id = self.new_notebook_id(name)
         metadata = current.new_metadata(name=name)
         nb = current.new_notebook(metadata=metadata)
@@ -254,3 +275,12 @@ class NotebookManager(LoggingConfigurable):
             current.write(nb, f, u'json')
         return notebook_id
 
+    def copy_notebook(self, notebook_id):
+        """Copy an existing notebook and return its notebook_id."""
+        last_mod, nb = self.get_notebook_object(notebook_id)
+        name = nb.metadata.name + '-Copy'
+        path, name = self.increment_filename(name)
+        nb.metadata.name = name
+        notebook_id = self.new_notebook_id(name)
+        self.save_notebook_object(notebook_id, nb)
+        return notebook_id

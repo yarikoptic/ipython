@@ -13,21 +13,47 @@ var IPython = (function (IPython) {
 
     var utils = IPython.utils;
 
-    var Cell = function (notebook) {
-        this.notebook = notebook;
+
+    var Cell = function () {
+        this.placeholder = this.placeholder || '';
         this.read_only = false;
-        if (notebook){
-            this.read_only = notebook.read_only;
-        }
         this.selected = false;
         this.element = null;
+        this.metadata = {};
         this.create_element();
         if (this.element !== null) {
-            this.set_autoindent(true);
             this.element.data("cell", this);
             this.bind_events();
         }
         this.cell_id = utils.uuid();
+    };
+
+
+    // Subclasses must implement create_element.
+    Cell.prototype.create_element = function () {};
+
+
+    Cell.prototype.bind_events = function () {
+        var that = this;
+        // We trigger events so that Cell doesn't have to depend on Notebook.
+        that.element.click(function (event) {
+            if (that.selected === false) {
+                $([IPython.events]).trigger('select.Cell', {'cell':that});
+            }
+        });
+        that.element.focusin(function (event) {
+            if (that.selected === false) {
+                $([IPython.events]).trigger('select.Cell', {'cell':that});
+            }
+        });
+    };
+
+
+    // typeset with MathJax if MathJax is available
+    Cell.prototype.typeset = function () {
+        if (window.MathJax){
+            MathJax.Hub.Queue(["Typeset",MathJax.Hub]);
+        }
     };
 
 
@@ -43,20 +69,64 @@ var IPython = (function (IPython) {
     };
 
 
-    Cell.prototype.bind_events = function () {
-        var that = this;
-        var nb = that.notebook;
-        that.element.click(function (event) {
-            if (that.selected === false) {
-                nb.select(nb.find_cell_index(that));
-            }
-        });
-        that.element.focusin(function (event) {
-            if (that.selected === false) {
-                nb.select(nb.find_cell_index(that));
-            }
-        });
+    Cell.prototype.get_text = function () {
     };
+
+
+    Cell.prototype.set_text = function (text) {
+    };
+
+
+    Cell.prototype.refresh = function () {
+        this.code_mirror.refresh();
+    };
+
+
+    Cell.prototype.edit = function () {
+    };
+
+
+    Cell.prototype.render = function () {
+    };
+
+
+    Cell.prototype.toJSON = function () {
+        var data = {};
+        data.metadata = this.metadata;
+        return data;
+    };
+
+
+    Cell.prototype.fromJSON = function (data) {
+        if (data.metadata !== undefined) {
+            this.metadata = data.metadata;
+        }
+    };
+
+
+    Cell.prototype.is_splittable = function () {
+        return true;
+    };
+
+
+    Cell.prototype.get_pre_cursor = function () {
+        var cursor = this.code_mirror.getCursor();
+        var text = this.code_mirror.getRange({line:0,ch:0}, cursor);
+        text = text.replace(/^\n+/, '').replace(/\n+$/, '');
+        return text;
+    }
+
+
+    Cell.prototype.get_post_cursor = function () {
+        var cursor = this.code_mirror.getCursor();
+        var last_line_num = this.code_mirror.lineCount()-1;
+        var last_line_len = this.code_mirror.getLine(last_line_num).length;
+        var end = {line:last_line_num, ch:last_line_len}
+        var text = this.code_mirror.getRange(cursor, end);
+        text = text.replace(/^\n+/, '').replace(/\n+$/, '');
+        return text;
+    };
+
 
     Cell.prototype.grow = function(element) {
         // Grow the cell by hand. This is used upon reloading from JSON, when the
@@ -75,25 +145,15 @@ var IPython = (function (IPython) {
     };
 
 
-    Cell.prototype.set_autoindent = function (state) {
-        if (state) {
-            this.code_mirror.setOption('tabMode', 'indent');
-            this.code_mirror.setOption('enterMode', 'indent');
+    Cell.prototype.toggle_line_numbers = function () {
+        if (this.code_mirror.getOption('lineNumbers') == false) {
+            this.code_mirror.setOption('lineNumbers', true);
         } else {
-            this.code_mirror.setOption('tabMode', 'shift');
-            this.code_mirror.setOption('enterMode', 'flat');
+            this.code_mirror.setOption('lineNumbers', false);
         }
+        this.code_mirror.refresh();
     };
 
-    // Subclasses must implement create_element.
-    Cell.prototype.create_element = function () {};
-
-    // typeset with MathJax if MathJax is available
-    Cell.prototype.typeset = function () {
-        if (window.MathJax){
-            MathJax.Hub.Queue(["Typeset",MathJax.Hub]);
-        }
-    };
 
     IPython.Cell = Cell;
 

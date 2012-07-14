@@ -28,6 +28,7 @@ from zmq.eventloop.zmqstream import ZMQStream
 
 # internal:
 from IPython.utils.importstring import import_item
+from IPython.utils.py3compat import cast_bytes
 from IPython.utils.traitlets import (
         HasTraits, Instance, Integer, Unicode, Dict, Set, Tuple, CBytes, DottedObjectName
         )
@@ -63,6 +64,7 @@ def empty_record():
         'started': None,
         'completed': None,
         'resubmitted': None,
+        'received': None,
         'result_header' : None,
         'result_content' : None,
         'result_buffers' : None,
@@ -88,6 +90,7 @@ def init_record(msg):
         'started': None,
         'completed': None,
         'resubmitted': None,
+        'received': None,
         'result_header' : None,
         'result_content' : None,
         'result_buffers' : None,
@@ -105,9 +108,9 @@ class EngineConnector(HasTraits):
     Attributes are:
     id (int): engine ID
     uuid (str): uuid (unused?)
-    queue (str): identity of queue's XREQ socket
-    registration (str): identity of registration XREQ socket
-    heartbeat (str): identity of heartbeat XREQ socket
+    queue (str): identity of queue's DEALER socket
+    registration (str): identity of registration DEALER socket
+    heartbeat (str): identity of heartbeat DEALER socket
     """
     id=Integer(0)
     queue=CBytes()
@@ -116,12 +119,19 @@ class EngineConnector(HasTraits):
     heartbeat=CBytes()
     pending=Set()
 
+_db_shortcuts = {
+    'sqlitedb' : 'IPython.parallel.controller.sqlitedb.SQLiteDB',
+    'mongodb'  : 'IPython.parallel.controller.mongodb.MongoDB',
+    'dictdb'   : 'IPython.parallel.controller.dictdb.DictDB',
+    'nodb'     : 'IPython.parallel.controller.dictdb.NoDB',
+}
+
 class HubFactory(RegistrationFactory):
     """The Configurable for setting up a Hub."""
 
     # port-pairs for monitoredqueues:
     hb = Tuple(Integer,Integer,config=True,
-        help="""XREQ/SUB Port pair for Engine heartbeats""")
+        help="""DEALER/SUB Port pair for Engine heartbeats""")
     def _hb_default(self):
         return tuple(util.select_random_ports(2))
 
@@ -178,8 +188,17 @@ class HubFactory(RegistrationFactory):
 
     monitor_url = Unicode('')
 
-    db_class = DottedObjectName('IPython.parallel.controller.dictdb.DictDB',
-        config=True, help="""The class to use for the DB backend""")
+    db_class = DottedObjectName('NoDB',
+        config=True, help="""The class to use for the DB backend
+        
+        Options include:
+        
+        SQLiteDB: SQLite
+        MongoDB : use MongoDB
+        DictDB  : in-memory storage (fastest, but be mindful of memory growth of the Hub)
+        NoDB    : disable database altogether (default)
+        
+        """)
 
     # not configurable
     db = Instance('IPython.parallel.controller.dictdb.BaseDB')
@@ -255,9 +274,9 @@ class HubFactory(RegistrationFactory):
         sub = ZMQStream(sub, loop)
 
         # connect the db
-        self.log.info('Hub using DB backend: %r'%(self.db_class.split()[-1]))
-        # cdir = self.config.Global.cluster_dir
-        self.db = import_item(str(self.db_class))(session=self.session.session,
+        db_class = _db_shortcuts.get(self.db_class.lower(), self.db_class)
+        self.log.info('Hub using DB backend: %r', (db_class.split('.')[-1]))
+        self.db = import_item(str(db_class))(session=self.session.session,
                                             config=self.config, log=self.log)
         time.sleep(.25)
         try:
@@ -306,7 +325,7 @@ class Hub(SessionFactory):
     session: Session object
     <removed> context: zmq context for creating new connections (?)
     queue: ZMQStream for monitoring the command queue (SUB)
-    query: ZMQStream for engine registration and client queries requests (XREP)
+    query: ZMQStream for engine registration and client queries requests (ROUTER)
     heartbeat: HeartMonitor object checking the pulse of the engines
     notifier: ZMQStream for broadcasting engine registration changes (PUB)
     db: connection to db for out of memory logging of commands
@@ -439,7 +458,7 @@ class Hub(SessionFactory):
         for t in targets:
             # map raw identities to ids
             if isinstance(t, (str,unicode)):
-                t = self.by_ident.get(t, t)
+                t = self.by_ident.get(cast_bytes(t), t)
             _targets.append(t)
         targets = _targets
         bad_targets = [ t for t in targets if t not in self.ids ]
@@ -454,6 +473,7 @@ class Hub(SessionFactory):
     #-----------------------------------------------------------------------------
 
 
+    @util.log_errors
     def dispatch_monitor_traffic(self, msg):
         """all ME and Task queue messages come through here, as well as
         IOPub traffic."""
@@ -464,15 +484,16 @@ class Hub(SessionFactory):
         except ValueError:
             idents=[]
         if not idents:
-            self.log.error("Bad Monitor Message: %r", msg)
+            self.log.error("Monitor message without topic: %r", msg)
             return
         handler = self.monitor_handlers.get(switch, None)
         if handler is not None:
             handler(idents, msg)
         else:
-            self.log.error("Invalid monitor topic: %r", switch)
+            self.log.error("Unrecognized monitor topic: %r", switch)
 
 
+    @util.log_errors
     def dispatch_query(self, msg):
         """Route registration requests and queries from clients."""
         try:
@@ -630,6 +651,7 @@ class Hub(SessionFactory):
         result = {
             'result_header' : rheader,
             'result_content': msg['content'],
+            'received': datetime.now(),
             'started' : started,
             'completed' : completed
         }
@@ -714,15 +736,18 @@ class Hub(SessionFactory):
             self.unassigned.remove(msg_id)
 
         header = msg['header']
-        engine_uuid = header.get('engine', None)
-        eid = self.by_ident.get(engine_uuid, None)
+        engine_uuid = header.get('engine', u'')
+        eid = self.by_ident.get(cast_bytes(engine_uuid), None)
+        
+        status = header.get('status', None)
 
         if msg_id in self.pending:
             self.log.info("task::task %r finished on %s", msg_id, eid)
             self.pending.remove(msg_id)
             self.all_completed.add(msg_id)
             if eid is not None:
-                self.completed[eid].append(msg_id)
+                if status != 'aborted':
+                    self.completed[eid].append(msg_id)
                 if msg_id in self.tasks[eid]:
                     self.tasks[eid].remove(msg_id)
             completed = header['date']
@@ -732,7 +757,8 @@ class Hub(SessionFactory):
                 'result_content': msg['content'],
                 'started' : started,
                 'completed' : completed,
-                'engine_uuid': engine_uuid
+                'received' : datetime.now(),
+                'engine_uuid': engine_uuid,
             }
 
             result['result_buffers'] = msg['buffers']
@@ -754,7 +780,7 @@ class Hub(SessionFactory):
         # print (content)
         msg_id = content['msg_id']
         engine_uuid = content['engine_id']
-        eid = self.by_ident[util.asbytes(engine_uuid)]
+        eid = self.by_ident[cast_bytes(engine_uuid)]
 
         self.log.info("task::task %r arrived on %r", msg_id, eid)
         if msg_id in self.unassigned:
@@ -790,7 +816,7 @@ class Hub(SessionFactory):
 
         parent = msg['parent_header']
         if not parent:
-            self.log.error("iopub::invalid IOPub message: %r", msg)
+            self.log.warn("iopub::IOPub message lacks parent: %r", msg)
             return
         msg_id = parent['msg_id']
         msg_type = msg['header']['msg_type']
@@ -814,8 +840,15 @@ class Hub(SessionFactory):
             d['pyerr'] = content
         elif msg_type == 'pyin':
             d['pyin'] = content['code']
+        elif msg_type in ('display_data', 'pyout'):
+            d[msg_type] = content
+        elif msg_type == 'status':
+            pass
         else:
-            d[msg_type] = content.get('data', '')
+            self.log.warn("unhandled iopub msg_type: %r", msg_type)
+
+        if not d:
+            return
 
         try:
             self.db.update_record(msg_id, d)
@@ -844,13 +877,13 @@ class Hub(SessionFactory):
         """Register a new engine."""
         content = msg['content']
         try:
-            queue = util.asbytes(content['queue'])
+            queue = cast_bytes(content['queue'])
         except KeyError:
             self.log.error("registration::queue not specified", exc_info=True)
             return
         heart = content.get('heartbeat', None)
         if heart:
-            heart = util.asbytes(heart)
+            heart = cast_bytes(heart)
         """register a new engine, and create the socket(s) necessary"""
         eid = self._next_id
         # print (eid, queue, reg, heart)
@@ -1124,7 +1157,7 @@ class Hub(SessionFactory):
 
         # validate msg_ids
         found_ids = [ rec['msg_id'] for rec in records ]
-        invalid_ids = filter(lambda m: m in self.pending, found_ids)
+        pending_ids = [ msg_id for msg_id in found_ids if msg_id in self.pending ]
         if len(records) > len(msg_ids):
             try:
                 raise RuntimeError("DB appears to be in an inconsistent state."
@@ -1137,50 +1170,61 @@ class Hub(SessionFactory):
                 raise KeyError("No such msg(s): %r" % missing)
             except KeyError:
                 return finish(error.wrap_exception())
-        elif invalid_ids:
-            msg_id = invalid_ids[0]
+        elif pending_ids:
+            pass
+            # no need to raise on resubmit of pending task, now that we
+            # resubmit under new ID, but do we want to raise anyway?
+            # msg_id = invalid_ids[0]
+            # try:
+            #     raise ValueError("Task(s) %r appears to be inflight" % )
+            # except Exception:
+            #     return finish(error.wrap_exception())
+
+        # mapping of original IDs to resubmitted IDs
+        resubmitted = {}
+
+        # send the messages
+        for rec in records:
+            header = rec['header']
+            msg = self.session.msg(header['msg_type'], parent=header)
+            msg_id = msg['msg_id']
+            msg['content'] = rec['content']
+            
+            # use the old header, but update msg_id and timestamp
+            fresh = msg['header']
+            header['msg_id'] = fresh['msg_id']
+            header['date'] = fresh['date']
+            msg['header'] = header
+
+            self.session.send(self.resubmit, msg, buffers=rec['buffers'])
+
+            resubmitted[rec['msg_id']] = msg_id
+            self.pending.add(msg_id)
+            msg['buffers'] = rec['buffers']
             try:
-                raise ValueError("Task %r appears to be inflight" % msg_id)
+                self.db.add_record(msg_id, init_record(msg))
             except Exception:
-                return finish(error.wrap_exception())
+                self.log.error("db::DB Error updating record: %s", msg_id, exc_info=True)
 
-        # clear the existing records
-        now = datetime.now()
-        rec = empty_record()
-        map(rec.pop, ['msg_id', 'header', 'content', 'buffers', 'submitted'])
-        rec['resubmitted'] = now
-        rec['queue'] = 'task'
-        rec['client_uuid'] = client_id[0]
-        try:
-            for msg_id in msg_ids:
-                self.all_completed.discard(msg_id)
-                self.db.update_record(msg_id, rec)
-        except Exception:
-            self.log.error('db::db error upating record', exc_info=True)
-            reply = error.wrap_exception()
-        else:
-            # send the messages
-            for rec in records:
-                header = rec['header']
-                # include resubmitted in header to prevent digest collision
-                header['resubmitted'] = now
-                msg = self.session.msg(header['msg_type'])
-                msg['content'] = rec['content']
-                msg['header'] = header
-                msg['header']['msg_id'] = rec['msg_id']
-                self.session.send(self.resubmit, msg, buffers=rec['buffers'])
-
-        finish(dict(status='ok'))
+        finish(dict(status='ok', resubmitted=resubmitted))
+        
+        # store the new IDs in the Task DB
+        for msg_id, resubmit_id in resubmitted.iteritems():
+            try:
+                self.db.update_record(msg_id, {'resubmitted' : resubmit_id})
+            except Exception:
+                self.log.error("db::DB Error updating record: %s", msg_id, exc_info=True)
 
 
     def _extract_record(self, rec):
         """decompose a TaskRecord dict into subsection of reply for get_result"""
         io_dict = {}
-        for key in 'pyin pyout pyerr stdout stderr'.split():
+        for key in ('pyin', 'pyout', 'pyerr', 'stdout', 'stderr'):
                 io_dict[key] = rec[key]
         content = { 'result_content': rec['result_content'],
                             'header': rec['header'],
                             'result_header' : rec['result_header'],
+                            'received' : rec['received'],
                             'io' : io_dict,
                           }
         if rec['result_buffers']:
@@ -1271,17 +1315,17 @@ class Hub(SessionFactory):
                 buffer_lens = [] if 'buffers' in keys else None
                 result_buffer_lens = [] if 'result_buffers' in keys else None
             else:
-                buffer_lens = []
-                result_buffer_lens = []
+                buffer_lens = None
+                result_buffer_lens = None
 
             for rec in records:
                 # buffers may be None, so double check
+                b = rec.pop('buffers', empty) or empty
                 if buffer_lens is not None:
-                    b = rec.pop('buffers', empty) or empty
                     buffer_lens.append(len(b))
                     buffers.extend(b)
+                rb = rec.pop('result_buffers', empty) or empty
                 if result_buffer_lens is not None:
-                    rb = rec.pop('result_buffers', empty) or empty
                     result_buffer_lens.append(len(rb))
                     buffers.extend(rb)
             content = dict(status='ok', records=records, buffer_lens=buffer_lens,

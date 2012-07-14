@@ -95,6 +95,12 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
     enable_calltips = Bool(True, config=True,
         help="Whether to draw information calltips on open-parentheses.")
 
+    clear_on_kernel_restart = Bool(True, config=True,
+        help="Whether to clear the console when the kernel is restarted")
+
+    confirm_restart = Bool(True, config=True,
+        help="Whether to ask for user confirmation when restarting kernel")
+
     # Emitted when a user visible 'execute_request' has been submitted to the
     # kernel from the FrontendWidget. Contains the code to be executed.
     executing = QtCore.Signal(object)
@@ -175,7 +181,7 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
     def copy(self):
         """ Copy the currently selected text to the clipboard, removing prompts.
         """
-        if self._page_control.hasFocus():
+        if self._page_control is not None and self._page_control.hasFocus():
             self._page_control.copy()
         elif self._control.hasFocus():
             text = self._control.textCursor().selection().toPlainText()
@@ -332,11 +338,11 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
         expr : string
             valid string to be executed by the kernel.
         callback : function
-            function accepting one arguement, as a string. The string will be
+            function accepting one argument, as a string. The string will be
             the `repr` of the result of evaluating `expr`
 
-        The `callback` is called with the 'repr()' of the result of `expr` as
-        first argument. To get the object, do 'eval()' onthe passed value.
+        The `callback` is called with the `repr()` of the result of `expr` as
+        first argument. To get the object, do `eval()` on the passed value.
 
         See Also
         --------
@@ -344,8 +350,8 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
 
         """
 
-        # generate uuid, which would be used as a indication of wether or not
-        # the unique request originate from here (can use msg id ?)
+        # generate uuid, which would be used as an indication of whether or
+        # not the unique request originated from here (can use msg id ?)
         local_uuid = str(uuid.uuid1())
         msg_id = self.kernel_manager.shell_channel.execute('',
             silent=True, user_expressions={ local_uuid:expr })
@@ -353,7 +359,7 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
         self._request_info['execute'][msg_id] = self._ExecutionRequest(msg_id, 'silent_exec_callback')
 
     def _handle_exec_callback(self, msg):
-        """Execute `callback` corresonding to `msg` reply, after ``_silent_exec_callback``
+        """Execute `callback` corresponding to `msg` reply, after ``_silent_exec_callback``
 
         Parameters
         ----------
@@ -362,7 +368,7 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
 
         Notes
         -----
-        This fonction will look for a `callback` associated with the
+        This function will look for a `callback` associated with the
         corresponding message id. Association has been made by
         `_silent_exec_callback`. `callback` is then called with the `repr()`
         of the value of corresponding `user_expressions` as argument.
@@ -516,6 +522,8 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
                     if reply == QtGui.QMessageBox.Yes:
                         self.exit_requested.emit(self)
                 else:
+                    # XXX: remove message box in favor of using the
+                    # clear_on_kernel_restart setting?
                     reply = QtGui.QMessageBox.question(self, title,
                         "Kernel has been reset. Clear the Console?",
                         QtGui.QMessageBox.Yes,QtGui.QMessageBox.No)
@@ -529,7 +537,7 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
         """ Called when the KernelManager channels have started listening or
             when the frontend is assigned an already listening KernelManager.
         """
-        self.reset()
+        self.reset(clear=True)
 
     #---------------------------------------------------------------------------
     # 'FrontendWidget' public interface
@@ -563,9 +571,13 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
             self._append_plain_text('Kernel process is either remote or '
                                     'unspecified. Cannot interrupt.\n')
 
-    def reset(self):
-        """ Resets the widget to its initial state. Similar to ``clear``, but
-            also re-writes the banner and aborts execution if necessary.
+    def reset(self, clear=False):
+        """ Resets the widget to its initial state if ``clear`` parameter or
+        ``clear_on_kernel_restart`` configuration setting is True, otherwise
+        prints a visual indication of the fact that the kernel restarted, but
+        does not clear the traces from previous usage of the kernel before it
+        was restarted.  With ``clear=True``, it is similar to ``%clear``, but
+        also re-writes the banner and aborts execution if necessary.
         """
         if self._executing:
             self._executing = False
@@ -573,8 +585,15 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
         self._reading = False
         self._highlighter.highlighting_on = False
 
-        self._control.clear()
-        self._append_plain_text(self.banner)
+        if self.clear_on_kernel_restart or clear:
+            self._control.clear()
+            self._append_plain_text(self.banner)
+        else:
+            self._append_plain_text("# restarting kernel...")
+            self._append_html("<hr><br>")
+            # XXX: Reprinting the full banner may be too much, but once #1680 is
+            # addressed, that will mitigate it.
+            #self._append_plain_text(self.banner)
         # update output marker for stdout/stderr, so that startup
         # messages appear after banner:
         self._append_before_prompt_pos = self._get_cursor().position()
@@ -599,10 +618,16 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
             # Prompt the user to restart the kernel. Un-pause the heartbeat if
             # they decline. (If they accept, the heartbeat will be un-paused
             # automatically when the kernel is restarted.)
-            buttons = QtGui.QMessageBox.Yes | QtGui.QMessageBox.No
-            result = QtGui.QMessageBox.question(self, 'Restart kernel?',
-                                                message, buttons)
-            if result == QtGui.QMessageBox.Yes:
+            if self.confirm_restart:
+                buttons = QtGui.QMessageBox.Yes | QtGui.QMessageBox.No
+                result = QtGui.QMessageBox.question(self, 'Restart kernel?',
+                                                    message, buttons)
+                do_restart = result == QtGui.QMessageBox.Yes
+            else:
+                # confirm_restart is False, so we don't need to ask user
+                # anything, just do the restart
+                do_restart = True
+            if do_restart:
                 try:
                     self.kernel_manager.restart_kernel(now=now)
                 except RuntimeError:
@@ -693,7 +718,7 @@ class FrontendWidget(HistoryConsoleWidget, BaseFrontendMixin):
             self._append_plain_text(traceback)
 
     def _process_execute_ok(self, msg):
-        """ Process a reply for a successful execution equest.
+        """ Process a reply for a successful execution request.
         """
         payload = msg['content']['payload']
         for item in payload:

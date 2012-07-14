@@ -78,22 +78,11 @@ representation of all the data, we can communicate with such clients.
    Not all of these have yet been fully fleshed out, but the key ones are, see
    kernel and frontend files for actual implementation details.
 
-   
-Python functional API
-=====================
-
-As messages are dicts, they map naturally to a ``func(**kw)`` call form.  We
-should develop, at a few key points, functional forms of all the requests that
-take arguments in this manner and automatically construct the necessary dict
-for sending.
-
-
 General Message Format
 ======================
 
-All messages send or received by any IPython process should have the following
-generic structure::
-    
+A message is defined by the following three-dictionary structure::
+
     {
       # The message header contains a pair of unique identifiers for the
       # originating session and the actual message id, in addition to the
@@ -108,22 +97,40 @@ generic structure::
                     # All recognized message type strings are listed below.
                     'msg_type' : str,
          },
-      # The msg's unique identifier and type are stored in the header, but
-      # are also accessible at the top-level for convenience.
-      'msg_id' : uuid,
-      'msg_type' : str,
 
       # In a chain of messages, the header from the parent is copied so that
       # clients can track where messages come from.
       'parent_header' : dict,
 
       # The actual content of the message must be a dict, whose structure
-      # depends on the message type.x
+      # depends on the message type.
       'content' : dict,
     }
 
-For each message type, the actual content will differ and all existing message
-types are specified in what follows of this document.
+   
+Python functional API
+=====================
+
+As messages are dicts, they map naturally to a ``func(**kw)`` call form.  We
+should develop, at a few key points, functional forms of all the requests that
+take arguments in this manner and automatically construct the necessary dict
+for sending.
+
+In addition, the Python implementation of the message specification extends
+messages upon deserialization to the following form for convenience::
+
+    {
+      'header' : dict,
+      # The msg's unique identifier and type are always stored in the header,
+      # but the Python implementation copies them to the top level.
+      'msg_id' : uuid,
+      'msg_type' : str,
+      'parent_header' : dict,
+      'content' : dict,
+    }
+
+All messages sent to or received by any IPython process should have this
+extended structure.
 
 
 Messages on the shell ROUTER/DEALER sockets
@@ -324,22 +331,17 @@ Message type: ``execute_reply``::
 When status is 'ok', the following extra fields are present::
 
     {
-      # The execution payload is a dict with string keys that may have been
+      # 'payload' will be a list of payload dicts.
+      # Each execution payload is a dict with string keys that may have been
       # produced by the code being executed.  It is retrieved by the kernel at
       # the end of the execution and sent back to the front end, which can take
       # action on it as needed.  See main text for further details.
-      'payload' : dict,
+      'payload' : list(dict),
 
       # Results for the user_variables and user_expressions.
       'user_variables' : dict,
       'user_expressions' : dict,
-
-      # The kernel will often transform the input provided to it.  If the
-      # '---->' transform had been applied, this is filled, otherwise it's the
-      # empty string.  So transformations like magics don't appear here, only
-      # autocall ones.
-      'transformed_code' : str,
-      }
+    }
 
 .. admonition:: Execution payloads
     
@@ -347,20 +349,19 @@ When status is 'ok', the following extra fields are present::
    given set of code, which normally is just displayed on the pyout stream
    through the PUB socket.  The idea of a payload is to allow special types of
    code, typically magics, to populate a data container in the IPython kernel
-   that will be shipped back to the caller via this channel.  The kernel will
-   have an API for this, probably something along the lines of::
+   that will be shipped back to the caller via this channel.  The kernel
+   has an API for this in the PayloadManager::
 
-       ip.exec_payload_add(key, value)
+       ip.payload_manager.write_payload(payload_dict)
 
-   though this API is still in the design stages.  The data returned in this
-   payload will allow frontends to present special views of what just happened.
+   which appends a dictionary to the list of payloads.
 
    
 When status is 'error', the following extra fields are present::
 
     {
-      'exc_name' : str,   # Exception name, as a string
-      'exc_value' : str,  # Exception value, as a string
+      'ename' : str,   # Exception name, as a string
+      'evalue' : str,  # Exception value, as a string
 
       # The traceback will contain a list of frames, represented each as a
       # string.  For now we'll stick to the existing design of ultraTB, which
@@ -553,7 +554,7 @@ Message type: ``object_info_reply``::
     # that no source was found.
     'source' : str,
     }
-'
+
     
 Complete
 --------
@@ -766,7 +767,12 @@ These messages are the re-broadcast of the ``execute_request``.
 Message type: ``pyin``::
 
     content = {
-        'code' : str  # Source code to be executed, one or more lines
+        'code' : str,  # Source code to be executed, one or more lines
+
+        # The counter for this execution is also provided so that clients can
+        # display it, since IPython automatically creates variables called _iN
+        # (for input prompt In[N]).
+        'execution_count' : int
     }
 
 Python outputs
@@ -848,7 +854,7 @@ Message type: ``crash``::
 
     content = {
        # Similarly to the 'error' case for execute_reply messages, this will
-       # contain exc_name, exc_type and traceback fields.
+       # contain ename, etype and traceback fields.
 
        # An additional field with supplementary information such as where to
        # send the crash message

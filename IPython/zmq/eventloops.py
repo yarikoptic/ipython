@@ -20,7 +20,9 @@ import sys
 import zmq
 
 # Local imports.
+from IPython.config.application import Application
 from IPython.utils import io
+
 
 #------------------------------------------------------------------------------
 # Eventloops for integrating the Kernel into different GUIs
@@ -76,6 +78,14 @@ def loop_wx(kernel):
     # The redirect=False here makes sure that wx doesn't replace
     # sys.stdout/stderr with its own classes.
     kernel.app = IPWxApp(redirect=False)
+
+    # The import of wx on Linux sets the handler for signal.SIGINT
+    # to 0.  This is a bug in wx or gtk.  We fix by just setting it
+    # back to the Python default.
+    import signal
+    if not callable(signal.getsignal(signal.SIGINT)):
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+
     start_event_loop_wx(kernel.app)
 
 
@@ -156,7 +166,10 @@ def loop_cocoa(kernel):
     # but still need a Poller for when there are no active windows,
     # during which time mainloop() returns immediately
     poller = zmq.Poller()
-    poller.register(kernel.shell_socket, zmq.POLLIN)
+    if kernel.control_stream:
+        poller.register(kernel.control_stream.socket, zmq.POLLIN)
+    for stream in kernel.shell_streams:
+        poller.register(stream.socket, zmq.POLLIN)
 
     while True:
         try:
@@ -195,11 +208,15 @@ loop_map = {
 
 def enable_gui(gui, kernel=None):
     """Enable integration with a given GUI"""
-    if kernel is None:
-        from .ipkernel import IPKernelApp
-        kernel = IPKernelApp.instance().kernel
     if gui not in loop_map:
         raise ValueError("GUI %r not supported" % gui)
+    if kernel is None:
+        if Application.initialized():
+            kernel = getattr(Application.instance(), 'kernel', None)
+        if kernel is None:
+            raise RuntimeError("You didn't specify a kernel,"
+                " and no IPython Application with a kernel appears to be running."
+            )
     loop = loop_map[gui]
     if kernel.eventloop is not None and kernel.eventloop is not loop:
         raise RuntimeError("Cannot activate multiple GUI eventloops")
