@@ -2,8 +2,8 @@
 """Release data for the IPython project."""
 
 #-----------------------------------------------------------------------------
-#  Copyright (c) 2008-2012, IPython Development Team.
-#  Copyright (c) 2001-2007, Fernando Perez <fernando.perez@colorado.edu>
+#  Copyright (c) 2008, IPython Development Team.
+#  Copyright (c) 2001, Fernando Perez <fernando.perez@colorado.edu>
 #  Copyright (c) 2001, Janko Hauser <jhauser@zscout.de>
 #  Copyright (c) 2001, Nathaniel Gray <n8gray@caltech.edu>
 #
@@ -20,9 +20,10 @@ name = 'ipython'
 # release.  'dev' as a _version_extra string means this is a development
 # version
 _version_major = 0
-_version_minor = 12
-_version_micro = 1  # use '' for first of series, number for 1 and above
-#_version_extra = 'rc2'
+_version_minor = 13
+_version_micro = ''  # use '' for first of series, number for 1 and above
+#_version_extra = 'dev'
+#_version_extra = 'rc1'
 _version_extra = ''  # Uncomment this for full releases
 
 # Construct full version string from these.
@@ -113,6 +114,8 @@ authors = {'Fernando' : ('Fernando Perez','fperez.net@gmail.com'),
            'Brian'    : ('Brian E Granger', 'ellisonbg@gmail.com'),
            'Min'      : ('Min Ragan-Kelley', 'benjaminrk@gmail.com'),
            'Thomas'   : ('Thomas A. Kluyver', 'takowl@gmail.com'),
+           'Jörgen'   : ('Jörgen Stenarson', 'jorgen.stenarson@bostream.nu'),
+           'Matthias' : ('Matthias Bussonnier', 'bussonniermatthias@gmail.com'),
            }
 
 author = 'The IPython Development Team'
@@ -121,9 +124,7 @@ author_email = 'ipython-dev@scipy.org'
 
 url = 'http://ipython.org'
 
-# This will only be valid for actual releases sent to PyPI, but that's OK since
-# those are the ones we want pip/easy_install to be able to find.
-download_url = 'http://archive.ipython.org/release/%s' % version
+download_url = 'https://github.com/ipython/ipython/downloads'
 
 platforms = ['Linux','Mac OSX','Windows XP/2000/NT/Vista/7']
 

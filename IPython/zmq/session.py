@@ -74,21 +74,9 @@ def squash_unicode(obj):
 #-----------------------------------------------------------------------------
 
 
-# jsonlib behaves a bit differently, so handle that where it affects us
-if jsonapi.jsonmod.__name__ == 'jsonlib':
-    # kwarg for serializing unknown types (datetime) is different
-    dumps_kwargs = dict(on_unknown=date_default)
-    # By default, jsonlib unpacks floats as Decimal instead of float,
-    # which can foul things up
-    loads_kwargs = dict(use_float=True)
-else:
-    # ISO8601-ify datetime objects
-    dumps_kwargs = dict(default=date_default)
-    # nothing to specify for loads
-    loads_kwargs = dict()
-
-json_packer = lambda obj: jsonapi.dumps(obj, **dumps_kwargs)
-json_unpacker = lambda s: extract_dates(jsonapi.loads(s, **loads_kwargs))
+# ISO8601-ify datetime objects
+json_packer = lambda obj: jsonapi.dumps(obj, default=date_default)
+json_unpacker = lambda s: extract_dates(jsonapi.loads(s))
 
 pickle_packer = lambda o: pickle.dumps(o,-1)
 pickle_unpacker = pickle.loads
@@ -641,7 +629,7 @@ class Session(Configurable):
         if isinstance(socket, ZMQStream):
             socket = socket.socket
         try:
-            msg_list = socket.recv_multipart(mode)
+            msg_list = socket.recv_multipart(mode, copy=copy)
         except zmq.ZMQError as e:
             if e.errno == zmq.EAGAIN:
                 # We can convert EAGAIN to None as we know in this case

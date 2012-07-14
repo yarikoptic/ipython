@@ -100,11 +100,11 @@ def find_packages():
     """
     Find all of IPython's packages.
     """
-    excludes = ['deathrow']
+    excludes = ['deathrow', 'quarantine']
     packages = []
     for dir,subdirs,files in os.walk('IPython'):
         package = dir.replace(os.path.sep, '.')
-        if any([ package.startswith('IPython.'+exc) for exc in excludes ]):
+        if any(package.startswith('IPython.'+exc) for exc in excludes):
             # package is to be excluded (e.g. deathrow)
             continue
         if '__init__.py' not in files:
@@ -145,6 +145,7 @@ def find_package_data():
     package_data = {
         'IPython.config.profile' : ['README*', '*/*.py'],
         'IPython.testing' : ['*.txt'],
+        'IPython.testing.plugin' : ['*.txt'],
         'IPython.frontend.html.notebook' : ['templates/*'] + static_data,
         'IPython.frontend.qt.console' : ['resources/icon/*.svg'],
     }
@@ -254,6 +255,44 @@ def make_man_update_target(manpage):
                locals() )
     return (manpath_gz, [manpath], gz_cmd)
 
+# The two functions below are copied from IPython.utils.path, so we don't need
+# to import IPython during setup, which fails on Python 3.
+
+def target_outdated(target,deps):
+    """Determine whether a target is out of date.
+
+    target_outdated(target,deps) -> 1/0
+
+    deps: list of filenames which MUST exist.
+    target: single filename which may or may not exist.
+
+    If target doesn't exist or is older than any file listed in deps, return
+    true, otherwise return false.
+    """
+    try:
+        target_time = os.path.getmtime(target)
+    except os.error:
+        return 1
+    for dep in deps:
+        dep_time = os.path.getmtime(dep)
+        if dep_time > target_time:
+            #print "For target",target,"Dep failed:",dep # dbg
+            #print "times (dep,tar):",dep_time,target_time # dbg
+            return 1
+    return 0
+
+
+def target_update(target,deps,cmd):
+    """Update a target with a given command given a list of dependencies.
+
+    target_update(target,deps,cmd) -> runs cmd if target is outdated.
+
+    This is just a wrapper around target_outdated() which calls the given
+    command if target is outdated."""
+
+    if target_outdated(target,deps):
+        os.system(cmd)
+
 #---------------------------------------------------------------------------
 # Find scripts
 #---------------------------------------------------------------------------
@@ -280,9 +319,7 @@ def find_scripts(entry_points=False, suffix=''):
             'iptest%s = IPython.testing.iptest:main',
             'irunner%s = IPython.lib.irunner:main'
         ]]
-        gui_scripts = [s % suffix for s in [
-            'ipython%s-qtconsole = IPython.frontend.qt.console.qtconsoleapp:main',
-        ]]
+        gui_scripts = []
         scripts = dict(console_scripts=console_scripts, gui_scripts=gui_scripts)
     else:
         parallel_scripts = pjoin('IPython','parallel','scripts')
@@ -358,32 +395,3 @@ def record_commit_info(pkg_dir, build_cmd=build_py):
                     'commit = "%s"\n' % repo_commit.decode('ascii'),
                 ])
     return MyBuildPy
-
-#-----------------------------------------------------------------------------
-# Misc. utilities common to setup2/3
-#-----------------------------------------------------------------------------
-
-def bdist_wininst_options():
-    """Options to setup specific to the creation of Windows binary installer.
-    """
-    
-    setup_args = {}
-
-    if 'bdist_wininst' not in sys.argv:
-        return setup_args
-
-    # If we're building a binary Windows installer, a few extra flags are
-    # needed.  Script to be run by the installer after the default setup
-    # routine, to add shortcuts and similar windows-only things.  Windows
-    # post-install scripts MUST reside in the scripts/ dir, otherwise distutils
-    # doesn't find them.
-    if len(sys.argv) > 2 and \
-           ('sdist' in sys.argv or 'bdist_rpm' in sys.argv):
-        print >> sys.stderr, "ERROR: bdist_wininst must be run alone. Exiting."
-        sys.exit(1)
-    setup_args['scripts'] = [os.path.join('scripts',
-                                          'ipython_win_post_install.py')]
-    setup_args['options'] = {"bdist_wininst":
-                             {"install_script":
-                              "ipython_win_post_install.py"}}
-    return setup_args

@@ -12,31 +12,71 @@
 
 $(document).ready(function () {
 
-    $('div#header').addClass('border-box-sizing');
-    $('div#header_border').addClass('border-box-sizing ui-widget ui-widget-content');
+    IPython.page = new IPython.Page();
 
+    $('div#tabs').tabs();
+    $('div#tabs').on('tabsselect', function (event, ui) {
+        var new_url = $('body').data('baseProjectUrl') + '#' + ui.panel.id;
+        window.history.replaceState({}, '', new_url);
+    });
     $('div#main_app').addClass('border-box-sizing ui-widget');
-    $('div#app_hbox').addClass('hbox');
-
-    $('div#content_toolbar').addClass('ui-widget ui-helper-clearfix');    
-
+    $('div#notebooks_toolbar').addClass('ui-widget ui-helper-clearfix');    
     $('#new_notebook').button().click(function (e) {
         window.open($('body').data('baseProjectUrl')+'new');
     });
 
-    $('div#left_panel').addClass('box-flex');
-    $('div#right_panel').addClass('box-flex');
-
-    IPython.read_only = $('meta[name=read_only]').attr("content") == 'True';
+    IPython.read_only = $('body').data('readOnly') === 'True';
     IPython.notebook_list = new IPython.NotebookList('div#notebook_list');
+    IPython.cluster_list = new IPython.ClusterList('div#cluster_list');
     IPython.login_widget = new IPython.LoginWidget('span#login_widget');
 
-    IPython.notebook_list.load_list();
+    var interval_id=0;
+    // auto refresh every xx secondes, no need to be fast,
+    //  update is done at least when page get focus
+    var time_refresh = 60; // in sec
 
-    // These have display: none in the css file and are made visible here to prevent FLOUC.
-    $('div#header').css('display','block');
-    $('div#main_app').css('display','block');
+    var enable_autorefresh = function(){
+        //refresh immediately , then start interval
+        if($('.upload_button').length == 0)
+        {
+            IPython.notebook_list.load_list();
+            IPython.cluster_list.load_list();
+        }
+        if (!interval_id){
+            interval_id = setInterval(function(){
+                    if($('.upload_button').length == 0)
+                    {
+                        IPython.notebook_list.load_list();
+                        IPython.cluster_list.load_list();
+                    }
+                }, time_refresh*1000);
+            }
+    }
 
+    var disable_autorefresh = function(){
+        clearInterval(interval_id);
+        interval_id = 0;
+    }
+
+    // stop autorefresh when page lose focus
+    $(window).blur(function() {
+        disable_autorefresh();
+    })
+
+    //re-enable when page get focus back
+    $(window).focus(function() {
+        enable_autorefresh();
+    });
+
+    // finally start it, it will refresh immediately
+    enable_autorefresh();
+
+    IPython.page.show();
+    
+    // bound the upload method to the on change of the file select list
+    $("#alternate_upload").change(function (event){
+        IPython.notebook_list.handelFilesUpload(event,'form');
+    });
 
 });
 

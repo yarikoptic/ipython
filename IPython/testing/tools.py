@@ -1,13 +1,8 @@
-"""Generic testing tools that do NOT depend on Twisted.
+"""Generic testing tools.
 
 In particular, this module exposes a set of top-level assert* functions that
 can be used in place of nose.tools.assert* in method generators (the ones in
 nose can not, at least as of nose 0.10.4).
-
-Note: our testing package contains testing.util, which does depend on Twisted
-and provides utilities for tests that manage Deferreds.  All testing support
-tools that only depend on nose, IPython or the standard library should go here
-instead.
 
 
 Authors
@@ -47,9 +42,10 @@ except ImportError:
 
 from IPython.config.loader import Config
 from IPython.utils.process import find_cmd, getoutputerror
-from IPython.utils.text import list_strings, getdefaultencoding
+from IPython.utils.text import list_strings
 from IPython.utils.io import temp_pyfile, Tee
 from IPython.utils import py3compat
+from IPython.utils.encoding import DEFAULT_ENCODING
 
 from . import decorators as dec
 from . import skipdoctest
@@ -216,18 +212,12 @@ def ipexec(fname, options=None):
     full_fname = os.path.join(test_dir, fname)
     full_cmd = '%s %s %s' % (ipython_cmd, cmdargs, full_fname)
     #print >> sys.stderr, 'FULL CMD:', full_cmd # dbg
-    out = getoutputerror(full_cmd)
-    # `import readline` causes 'ESC[?1034h' to be the first output sometimes,
-    # so strip that off the front of the first line if it is found
+    out, err = getoutputerror(full_cmd)
+    # `import readline` causes 'ESC[?1034h' to be output sometimes,
+    # so strip that out before doing comparisons
     if out:
-        first = out[0]
-        m = re.match(r'\x1b\[[^h]+h', first)
-        if m:
-            # strip initial readline escape
-            out = list(out)
-            out[0] = first[len(m.group()):]
-            out = tuple(out)
-    return out
+        out = re.sub(r'\x1b\[[^h]+h', '', out)
+    return out, err
 
 
 def ipexec_validate(fname, expected_out, expected_err='',
@@ -333,7 +323,7 @@ else:
     # so we need a class that can handle both.
     class MyStringIO(StringIO):
         def write(self, s):
-            s = py3compat.cast_unicode(s, encoding=getdefaultencoding())
+            s = py3compat.cast_unicode(s, encoding=DEFAULT_ENCODING)
             super(MyStringIO, self).write(s)
 
 notprinted_msg = """Did not find {0!r} in printed output (on {1}):

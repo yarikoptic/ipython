@@ -21,20 +21,24 @@ import json
 from xml.etree import ElementTree as ET
 import re
 
+from IPython.nbformat import v3
 from IPython.nbformat import v2
 from IPython.nbformat import v1
 
-from IPython.nbformat.v2 import (
+from IPython.nbformat.v3 import (
     NotebookNode,
     new_code_cell, new_text_cell, new_notebook, new_output, new_worksheet,
-    parse_filename, new_metadata, new_author
+    parse_filename, new_metadata, new_author, new_heading_cell, nbformat,
+    nbformat_minor,
 )
 
 #-----------------------------------------------------------------------------
 # Code
 #-----------------------------------------------------------------------------
 
-current_nbformat = 2
+current_nbformat = nbformat
+current_nbformat_minor = nbformat_minor
+
 
 
 class NBFormatError(Exception):
@@ -44,71 +48,62 @@ class NBFormatError(Exception):
 def parse_json(s, **kwargs):
     """Parse a string into a (nbformat, dict) tuple."""
     d = json.loads(s, **kwargs)
-    nbformat = d.get('nbformat',1)
-    return nbformat, d
-
-
-def parse_xml(s, **kwargs):
-    """Parse a string into a (nbformat, etree) tuple."""
-    root = ET.fromstring(s)
-    nbformat_e = root.find('nbformat')
-    if nbformat_e is not None:
-        nbformat = int(nbformat_e.text)
-    else:
-        raise NBFormatError('No nbformat version found')
-    return nbformat, root
+    nbf = d.get('nbformat', 1)
+    nbm = d.get('nbformat_minor', 0)
+    return nbf, nbm, d
 
 
 def parse_py(s, **kwargs):
     """Parse a string into a (nbformat, string) tuple."""
-    pattern = r'# <nbformat>(?P<nbformat>\d+)</nbformat>'
+    nbf = current_nbformat
+    nbm = current_nbformat_minor
+    
+    pattern = r'# <nbformat>(?P<nbformat>\d+[\.\d+]*)</nbformat>'
     m = re.search(pattern,s)
     if m is not None:
-        nbformat = int(m.group('nbformat'))
-    else:
-        nbformat = 2
-    return nbformat, s
+        digits = m.group('nbformat').split('.')
+        nbf = int(digits[0])
+        if len(digits) > 1:
+            nbm = int(digits[1])
+
+    return nbf, nbm, s
 
 
 def reads_json(s, **kwargs):
     """Read a JSON notebook from a string and return the NotebookNode object."""
-    nbformat, d = parse_json(s, **kwargs)
-    if nbformat == 1:
+    nbf, minor, d = parse_json(s, **kwargs)
+    if nbf == 1:
         nb = v1.to_notebook_json(d, **kwargs)
-        nb = v2.convert_to_this_nbformat(nb, orig_version=1)
-    elif nbformat == 2:
+        nb = v3.convert_to_this_nbformat(nb, orig_version=1)
+    elif nbf == 2:
         nb = v2.to_notebook_json(d, **kwargs)
+        nb = v3.convert_to_this_nbformat(nb, orig_version=2)
+    elif nbf == 3:
+        nb = v3.to_notebook_json(d, **kwargs)
+        nb = v3.convert_to_this_nbformat(nb, orig_version=3, orig_minor=minor)
     else:
-        raise NBFormatError('Unsupported JSON nbformat version: %i' % nbformat)
+        raise NBFormatError('Unsupported JSON nbformat version: %i' % nbf)
     return nb
 
 
 def writes_json(nb, **kwargs):
-    return v2.writes_json(nb, **kwargs)
-
-
-def reads_xml(s, **kwargs):
-    """Read an XML notebook from a string and return the NotebookNode object."""
-    nbformat, root = parse_xml(s, **kwargs)
-    if nbformat == 2:
-        nb = v2.to_notebook_xml(root, **kwargs)
-    else:
-        raise NBFormatError('Unsupported XML nbformat version: %i' % nbformat)
-    return nb
+    return v3.writes_json(nb, **kwargs)
 
 
 def reads_py(s, **kwargs):
     """Read a .py notebook from a string and return the NotebookNode object."""
-    nbformat, s = parse_py(s, **kwargs)
-    if nbformat == 2:
+    nbf, nbm, s = parse_py(s, **kwargs)
+    if nbf == 2:
         nb = v2.to_notebook_py(s, **kwargs)
+    elif nbf == 3:
+        nb = v3.to_notebook_py(s, **kwargs)
     else:
-        raise NBFormatError('Unsupported PY nbformat version: %i' % nbformat)
+        raise NBFormatError('Unsupported PY nbformat version: %i' % nbf)
     return nb
 
 
 def writes_py(nb, **kwargs):
-    return v2.writes_py(nb, **kwargs)
+    return v3.writes_py(nb, **kwargs)
 
 
 # High level API
@@ -133,9 +128,7 @@ def reads(s, format, **kwargs):
         The notebook that was read.
     """
     format = unicode(format)
-    if format == u'xml':
-        return reads_xml(s, **kwargs)
-    elif format == u'json' or format == u'ipynb':
+    if format == u'json' or format == u'ipynb':
         return reads_json(s, **kwargs)
     elif format == u'py':
         return reads_py(s, **kwargs)
@@ -161,9 +154,7 @@ def writes(nb, format, **kwargs):
         The notebook string.
     """
     format = unicode(format)
-    if format == u'xml':
-        raise NotImplementedError('Write to XML files is not implemented.')
-    elif format == u'json' or format == u'ipynb':
+    if format == u'json' or format == u'ipynb':
         return writes_json(nb, **kwargs)
     elif format == u'py':
         return writes_py(nb, **kwargs)

@@ -26,6 +26,7 @@ itself from the command line. There are two ways of running this script:
 #-----------------------------------------------------------------------------
 
 # Stdlib
+import glob
 import os
 import os.path as path
 import signal
@@ -40,19 +41,28 @@ import warnings
 # it for actual use.  This should get into nose upstream, but its release cycle
 # is slow and we need it for our parametric tests to work correctly.
 from IPython.testing import nosepatch
+
+# Monkeypatch extra assert methods into nose.tools if they're not already there.
+# This can be dropped once we no longer test on Python 2.6
+from IPython.testing import nose_assert_methods
+
 # Now, proceed to import nose itself
 import nose.plugins.builtin
+from nose.plugins.xunit import Xunit
+from nose import SkipTest
 from nose.core import TestProgram
 
 # Our own imports
+from IPython.utils import py3compat
 from IPython.utils.importstring import import_item
-from IPython.utils.path import get_ipython_module_path
+from IPython.utils.path import get_ipython_module_path, get_ipython_package_dir
 from IPython.utils.process import find_cmd, pycmd2argv
 from IPython.utils.sysinfo import sys_info
+from IPython.utils.warn import warn
 
 from IPython.testing import globalipapp
 from IPython.testing.plugin.ipdoctest import IPythonDoctest
-from IPython.external.decorators import KnownFailure
+from IPython.external.decorators import KnownFailure, knownfailureif
 
 pjoin = path.join
 
@@ -78,6 +88,23 @@ warnings.filterwarnings('ignore', 'the sha module is deprecated',
 # Wx on Fedora11 spits these out
 warnings.filterwarnings('ignore', 'wxPython/wxWidgets release number mismatch',
                         UserWarning)
+
+# ------------------------------------------------------------------------------
+# Monkeypatch Xunit to count known failures as skipped.
+# ------------------------------------------------------------------------------
+def monkeypatch_xunit():
+    try:
+        knownfailureif(True)(lambda: None)()
+    except Exception as e:
+        KnownFailureTest = type(e)
+
+    def addError(self, test, err, capt=None):
+        if issubclass(err[0], KnownFailureTest):
+            err = (SkipTest,) + err[1:]
+        return self.orig_addError(test, err, capt)
+
+    Xunit.orig_addError = Xunit.addError
+    Xunit.addError = addError
 
 #-----------------------------------------------------------------------------
 # Logic for skipping doctests
@@ -123,14 +150,18 @@ have = {}
 
 have['curses'] = test_for('_curses')
 have['matplotlib'] = test_for('matplotlib')
+have['numpy'] = test_for('numpy')
 have['pexpect'] = test_for('IPython.external.pexpect')
 have['pymongo'] = test_for('pymongo')
+have['pygments'] = test_for('pygments')
+have['qt'] = test_for('IPython.external.qt')
+have['rpy2'] = test_for('rpy2')
+have['sqlite3'] = test_for('sqlite3')
+have['cython'] = test_for('Cython')
+have['oct2py'] = test_for('oct2py')
+have['tornado'] = test_for('tornado.version_info', (2,1,0), callback=None)
 have['wx'] = test_for('wx')
 have['wx.aui'] = test_for('wx.aui')
-have['qt'] = test_for('IPython.external.qt')
-have['sqlite3'] = test_for('sqlite3')
-
-have['tornado'] = test_for('tornado.version_info', (2,1,0), callback=None)
 
 if os.name == 'nt':
     min_zmq = (2,1,7)
@@ -191,10 +222,8 @@ def make_exclude():
     ipjoin = lambda *paths: pjoin('IPython', *paths)
 
     exclusions = [ipjoin('external'),
-                  pjoin('IPython_doctest_plugin'),
                   ipjoin('quarantine'),
                   ipjoin('deathrow'),
-                  ipjoin('testing', 'attic'),
                   # This guy is probably attic material
                   ipjoin('testing', 'mkdoctests'),
                   # Testing inputhook will need a lot of thought, to figure out
@@ -202,7 +231,6 @@ def make_exclude():
                   # loops in the picture
                   ipjoin('lib', 'inputhook'),
                   # Config files aren't really importable stand-alone
-                  ipjoin('config', 'default'),
                   ipjoin('config', 'profile'),
                   ]
     if not have['sqlite3']:
@@ -210,10 +238,16 @@ def make_exclude():
         exclusions.append(ipjoin('core', 'history'))
     if not have['wx']:
         exclusions.append(ipjoin('lib', 'inputhookwx'))
+    
+    # FIXME: temporarily disable autoreload tests, as they can produce
+    # spurious failures in subsequent tests (cythonmagic).
+    exclusions.append(ipjoin('extensions', 'autoreload'))
+    exclusions.append(ipjoin('extensions', 'tests', 'test_autoreload'))
 
     # We do this unconditionally, so that the test suite doesn't import
     # gtk, changing the default encoding and masking some unicode bugs.
     exclusions.append(ipjoin('lib', 'inputhookgtk'))
+    exclusions.append(ipjoin('zmq', 'gui', 'gtkembed'))
 
     # These have to be skipped on win32 because the use echo, rm, cd, etc.
     # See ticket https://github.com/ipython/ipython/issues/87
@@ -222,8 +256,7 @@ def make_exclude():
         exclusions.append(ipjoin('testing', 'plugin', 'dtexample'))
 
     if not have['pexpect']:
-        exclusions.extend([ipjoin('scripts', 'irunner'),
-                           ipjoin('lib', 'irunner'),
+        exclusions.extend([ipjoin('lib', 'irunner'),
                            ipjoin('lib', 'tests', 'test_irunner'),
                            ipjoin('frontend', 'terminal', 'console'),
                            ])
@@ -235,7 +268,7 @@ def make_exclude():
         exclusions.append(ipjoin('frontend', 'consoleapp.py'))
         exclusions.append(ipjoin('frontend', 'terminal', 'console'))
         exclusions.append(ipjoin('parallel'))
-    elif not have['qt']:
+    elif not have['qt'] or not have['pygments']:
         exclusions.append(ipjoin('frontend', 'qt'))
 
     if not have['pymongo']:
@@ -244,14 +277,38 @@ def make_exclude():
 
     if not have['matplotlib']:
         exclusions.extend([ipjoin('core', 'pylabtools'),
-                           ipjoin('core', 'tests', 'test_pylabtools')])
+                           ipjoin('core', 'tests', 'test_pylabtools'),
+                           ipjoin('zmq', 'pylab'),
+        ])
+
+    if not have['cython']:
+        exclusions.extend([ipjoin('extensions', 'cythonmagic')])
+        exclusions.extend([ipjoin('extensions', 'tests', 'test_cythonmagic')])
+
+    if not have['oct2py']:
+        exclusions.extend([ipjoin('extensions', 'octavemagic')])
+        exclusions.extend([ipjoin('extensions', 'tests', 'test_octavemagic')])
 
     if not have['tornado']:
         exclusions.append(ipjoin('frontend', 'html'))
 
+    if not have['rpy2'] or not have['numpy']:
+        exclusions.append(ipjoin('extensions', 'rmagic'))
+        exclusions.append(ipjoin('extensions', 'tests', 'test_rmagic'))
+
     # This is needed for the reg-exp to match on win32 in the ipdoctest plugin.
     if sys.platform == 'win32':
         exclusions = [s.replace('\\','\\\\') for s in exclusions]
+    
+    # check for any exclusions that don't seem to exist:
+    parent, _ = os.path.split(get_ipython_package_dir())
+    for exclusion in exclusions:
+        if exclusion.endswith(('deathrow', 'quarantine')):
+            # ignore deathrow/quarantine, which exist in dev, but not install
+            continue
+        fullpath = pjoin(parent, exclusion)
+        if not os.path.exists(fullpath) and not glob.glob(fullpath + '.*'):
+            warn("Excluding nonexistent file: %r\n" % exclusion)
 
     return exclusions
 
@@ -267,6 +324,8 @@ class IPTester(object):
     call_args = None
     #: list, process ids of subprocesses we start (for cleanup)
     pids = None
+    #: str, coverage xml output file
+    coverage_xml = None
 
     def __init__(self, runner='iptest', params=None):
         """Create new test runner."""
@@ -284,6 +343,26 @@ class IPTester(object):
 
         # Assemble call
         self.call_args = self.runner+self.params
+        
+        # Find the section we're testing (IPython.foo)
+        for sect in self.params:
+            if sect.startswith('IPython'): break
+        else:
+            raise ValueError("Section not found", self.params)
+        
+        if '--with-xunit' in self.call_args:
+            
+            self.call_args.append('--xunit-file')
+            # FIXME: when Windows uses subprocess.call, these extra quotes are unnecessary:
+            xunit_file = path.abspath(sect+'.xunit.xml')
+            if sys.platform == 'win32':
+                xunit_file = '"%s"' % xunit_file
+            self.call_args.append(xunit_file)
+        
+        if '--with-xml-coverage' in self.call_args:
+            self.coverage_xml = path.abspath(sect+".coverage.xml")
+            self.call_args.remove('--with-xml-coverage')
+            self.call_args = ["coverage", "run", "--source="+sect] + self.call_args[1:]
 
         # Store pids of anything we start to clean up on deletion, if possible
         # (on posix only, since win32 has no os.kill)
@@ -299,7 +378,13 @@ class IPTester(object):
             # reliably in win32.
             # What types of problems are you having. They may be related to
             # running Python in unboffered mode. BG.
-            return os.system(' '.join(self.call_args))
+            for ndx, arg in enumerate(self.call_args):
+                # Enclose in quotes if necessary and legal
+                if ' ' in arg and os.path.isfile(arg) and arg[0] != '"':
+                    self.call_args[ndx] = '"%s"' % arg
+            call_args = [py3compat.cast_unicode(x) for x in self.call_args]
+            cmd = py3compat.unicode_to_str(u' '.join(call_args))
+            return os.system(cmd)
     else:
         def _run_cmd(self):
             # print >> sys.stderr, '*** CMD:', ' '.join(self.call_args) # dbg
@@ -315,11 +400,15 @@ class IPTester(object):
     def run(self):
         """Run the stored commands"""
         try:
-            return self._run_cmd()
+            retcode = self._run_cmd()
         except:
             import traceback
             traceback.print_exc()
             return 1  # signal failure
+        
+        if self.coverage_xml:
+            subprocess.call(["coverage", "xml", "-o", self.coverage_xml])
+        return retcode
 
     def __del__(self):
         """Cleanup on exit by killing any leftover processes."""
@@ -343,9 +432,10 @@ def make_runners():
 
     # Packages to be tested via nose, that only depend on the stdlib
     nose_pkg_names = ['config', 'core', 'extensions', 'frontend', 'lib',
-                     'scripts', 'testing', 'utils', 'nbformat' ]
+                     'testing', 'utils', 'nbformat' ]
 
     if have['zmq']:
+        nose_pkg_names.append('zmq')
         nose_pkg_names.append('parallel')
 
     # For debugging this code, only load quick stuff
@@ -367,15 +457,15 @@ def run_iptest():
     `iptest all`.  It simply calls nose with appropriate command line flags
     and accepts all of the standard nose arguments.
     """
+    # Apply our monkeypatch to Xunit
+    if '--with-xunit' in sys.argv and not hasattr(Xunit, 'orig_addError'):
+        monkeypatch_xunit()
 
     warnings.filterwarnings('ignore',
         'This will be removed soon.  Use IPython.testing.util instead')
 
     argv = sys.argv + [ '--detailed-errors',  # extra info in tracebacks
 
-                        # Loading ipdoctest causes problems with Twisted, but
-                        # our test suite runner now separates things and runs
-                        # all Twisted tests with trial.
                         '--with-ipdoctest',
                         '--ipdoctest-tests','--ipdoctest-extension=txt',
 
@@ -414,7 +504,7 @@ def run_iptestall():
     This function constructs :class:`IPTester` instances for all IPython
     modules and package and then runs each of them.  This causes the modules
     and packages of IPython to be tested each in their own subprocess using
-    nose or twisted.trial appropriately.
+    nose.
     """
 
     runners = make_runners()
@@ -461,7 +551,8 @@ def run_iptestall():
             print '-'*40
             print 'Runner failed:',name
             print 'You may wish to rerun this one individually, with:'
-            print ' '.join(failed_runner.call_args)
+            failed_call_args = [py3compat.cast_unicode(x) for x in failed_runner.call_args]
+            print u' '.join(failed_call_args)
             print
         # Ensure that our exit code indicates failure
         sys.exit(1)

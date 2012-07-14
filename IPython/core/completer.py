@@ -53,15 +53,14 @@ used, and this module (and the readline module) are silently inactive.
 # proper procedure is to maintain its copyright as belonging to the Python
 # Software Foundation (in addition to my own, for all new code).
 #
-#       Copyright (C) 2008-2011 IPython Development Team
-#       Copyright (C) 2001-2007 Fernando Perez. <fperez@colorado.edu>
+#       Copyright (C) 2008 IPython Development Team
+#       Copyright (C) 2001 Fernando Perez. <fperez@colorado.edu>
 #       Copyright (C) 2001 Python Software Foundation, www.python.org
 #
 #  Distributed under the terms of the BSD License.  The full license is in
 #  the file COPYING, distributed as part of this software.
 #
 #*****************************************************************************
-from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 # Imports
@@ -80,7 +79,7 @@ import sys
 
 from IPython.config.configurable import Configurable
 from IPython.core.error import TryNext
-from IPython.core.prefilter import ESC_MAGIC
+from IPython.core.inputsplitter import ESC_MAGIC
 from IPython.utils import generics
 from IPython.utils import io
 from IPython.utils.dir2 import dir2
@@ -178,10 +177,13 @@ def compress_user(path, tilde_expand, tilde_val):
     else:
         return path
 
+
 class Bunch(object): pass
+
 
 DELIMS = ' \t\n`!@#$^&*()=+[{]}\\|;:\'",<>?'
 GREEDY_DELIMS = ' \r\n'
+
 
 class CompletionSplitter(object):
     """An object to split an input line in a manner similar to readline.
@@ -194,7 +196,7 @@ class CompletionSplitter(object):
 
     What characters are used as splitting delimiters can be controlled by
     setting the `delims` attribute (this is a property that internally
-    automatically builds the necessary """
+    automatically builds the necessary regular expression)"""
 
     # Private interface
 
@@ -212,18 +214,20 @@ class CompletionSplitter(object):
 
     def __init__(self, delims=None):
         delims = CompletionSplitter._delims if delims is None else delims
-        self.set_delims(delims)
+        self.delims = delims
 
-    def set_delims(self, delims):
+    @property
+    def delims(self):
+        """Return the string of delimiter characters."""
+        return self._delims
+
+    @delims.setter
+    def delims(self, delims):
         """Set the delimiters for line splitting."""
         expr = '[' + ''.join('\\'+ c for c in delims) + ']'
         self._delim_re = re.compile(expr)
         self._delims = delims
         self._delim_expr = expr
-
-    def get_delims(self):
-        """Return the string of delimiter characters."""
-        return self._delims
 
     def split_line(self, line, cursor_pos=None):
         """Split a line of text with a cursor at the given position.
@@ -336,7 +340,7 @@ class Completer(Configurable):
         #io.rprint('Completer->attr_matches, txt=%r' % text) # dbg
         # Another option, seems to work great. Catches things like ''.<tab>
         m = re.match(r"(\S+(\.\w+)*)\.(\w*)$", text)
-
+    
         if m:
             expr, attr = m.group(1, 3)
         elif self.greedy:
@@ -346,7 +350,7 @@ class Completer(Configurable):
             expr, attr = m2.group(1,2)
         else:
             return []
-
+    
         try:
             obj = eval(expr, self.namespace)
         except:
@@ -355,7 +359,10 @@ class Completer(Configurable):
             except:
                 return []
 
-        words = dir2(obj)
+        if self.limit_to__all__ and hasattr(obj, '__all__'):
+            words = get__all__entries(obj)
+        else: 
+            words = dir2(obj)
 
         try:
             words = generics.complete_object(obj, words)
@@ -371,18 +378,28 @@ class Completer(Configurable):
         return res
 
 
+def get__all__entries(obj):
+    """returns the strings in the __all__ attribute"""
+    try:
+        words = getattr(obj, '__all__')
+    except:
+        return []
+    
+    return [w for w in words if isinstance(w, basestring)]
+
+
 class IPCompleter(Completer):
     """Extension of the completer class with IPython-specific features"""
 
     def _greedy_changed(self, name, old, new):
         """update the splitter and readline delims when greedy is changed"""
         if new:
-            self.splitter.set_delims(GREEDY_DELIMS)
+            self.splitter.delims = GREEDY_DELIMS
         else:
-            self.splitter.set_delims(DELIMS)
+            self.splitter.delims = DELIMS
 
         if self.readline:
-            self.readline.set_completer_delims(self.splitter.get_delims())
+            self.readline.set_completer_delims(self.splitter.delims)
     
     merge_completions = CBool(True, config=True,
         help="""Whether to merge completion results into a single list
@@ -401,6 +418,16 @@ class IPCompleter(Completer):
         When 1: all 'magic' names (``__foo__``) will be excluded.
         
         When 0: nothing will be excluded.
+        """
+    )
+    limit_to__all__ = CBool(default_value=False, config=True,
+        help="""Instruct the completer to use __all__ for the completion
+        
+        Specifically, when completing on ``object.<tab>``.
+        
+        When True: only those names in obj.__all__ will be included.
+        
+        When False [default]: the __all__ attribute is ignored 
         """
     )
 
@@ -449,7 +476,7 @@ class IPCompleter(Completer):
 
         # List where completion matches will be stored
         self.matches = []
-        self.shell = shell.shell
+        self.shell = shell
         if alias_table is None:
             alias_table = {}
         self.alias_table = alias_table
@@ -578,11 +605,23 @@ class IPCompleter(Completer):
         """Match magics"""
         #print 'Completer->magic_matches:',text,'lb',self.text_until_cursor # dbg
         # Get all shell magics now rather than statically, so magics loaded at
-        # runtime show up too
-        magics = self.shell.lsmagic()
+        # runtime show up too.
+        lsm = self.shell.magics_manager.lsmagic()
+        line_magics = lsm['line']
+        cell_magics = lsm['cell']
         pre = self.magic_escape
-        baretext = text.lstrip(pre)
-        return [ pre+m for m in magics if m.startswith(baretext)]
+        pre2 = pre+pre
+        
+        # Completion logic:
+        # - user gives %%: only do cell magics
+        # - user gives %: do both line and cell magics
+        # - no prefix: do both
+        # In other words, line magics are skipped if the user gives %% explicitly
+        bare_text = text.lstrip(pre)
+        comp = [ pre2+m for m in cell_magics if m.startswith(bare_text)]
+        if not text.startswith(pre2):
+            comp += [ pre+m for m in line_magics if m.startswith(bare_text)]
+        return comp
 
     def alias_matches(self, text):
         """Match internal system aliases"""
@@ -602,7 +641,7 @@ class IPCompleter(Completer):
 
     def python_matches(self,text):
         """Match attributes or global python names"""
-
+        
         #io.rprint('Completer->python_matches, txt=%r' % text) # dbg
         if "." in text:
             try:
@@ -653,14 +692,15 @@ class IPCompleter(Completer):
         try: regexp = self.__funcParamsRegex
         except AttributeError:
             regexp = self.__funcParamsRegex = re.compile(r'''
-                '.*?' |    # single quoted strings or
-                ".*?" |    # double quoted strings or
-                \w+   |    # identifier
-                \S         # other characters
+                '.*?(?<!\\)' |    # single quoted strings or
+                ".*?(?<!\\)" |    # double quoted strings or
+                \w+          |    # identifier
+                \S                # other characters
                 ''', re.VERBOSE | re.DOTALL)
         # 1. find the nearest identifier that comes before an unclosed
-        # parenthesis e.g. for "foo (1+bar(x), pa", the candidate is "foo"
-        tokens = regexp.findall(self.line_buffer)
+        # parenthesis before the cursor
+        # e.g. for "foo (1+bar(x), pa<cursor>,a=1)", the candidate is "foo"
+        tokens = regexp.findall(self.text_until_cursor)
         tokens.reverse()
         iterTokens = iter(tokens); openPar = 0
         for token in iterTokens:
@@ -796,7 +836,7 @@ class IPCompleter(Completer):
 
         self.line_buffer = line_buffer
         self.text_until_cursor = self.line_buffer[:cursor_pos]
-        #io.rprint('\nCOMP2 %r %r %r' % (text, line_buffer, cursor_pos))  # dbg
+        #io.rprint('COMP2 %r %r %r' % (text, line_buffer, cursor_pos))  # dbg
 
         # Start with a clean slate of completions
         self.matches[:] = []

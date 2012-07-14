@@ -39,10 +39,10 @@ Usage
     configuration, look into your `ipython_config.py` configuration file for
     details.
 
-    This file is typically installed in the `IPYTHON_DIR` directory, and there
+    This file is typically installed in the `IPYTHONDIR` directory, and there
     is a separate configuration directory for each profile. The default profile
-    directory will be located in $IPYTHON_DIR/profile_default. For Linux users,
-    IPYTHON_DIR defaults to `$HOME/.config/ipython`, and for other Unix systems
+    directory will be located in $IPYTHONDIR/profile_default. For Linux users,
+    IPYTHONDIR defaults to `$HOME/.config/ipython`, and for other Unix systems
     to `$HOME/.ipython`.  For Windows users, $HOME resolves to C:\\Documents
     and Settings\\YourUserName in most instances.
 
@@ -50,10 +50,10 @@ Usage
 
       $> ipython profile create
 
-    and start editing `IPYTHON_DIR/profile_default/ipython_config.py`
+    and start editing `IPYTHONDIR/profile_default/ipython_config.py`
 
     In IPython's documentation, we will refer to this directory as
-    `IPYTHON_DIR`, you can change its default location by creating an
+    `IPYTHONDIR`, you can change its default location by creating an
     environment variable with this name and setting it to the desired path.
 
     For more information, see the manual available in HTML and PDF in your
@@ -74,6 +74,7 @@ At your system command line, type 'ipython -h' to see the command line
 options available. This document only describes interactive features.
 
 MAIN FEATURES
+-------------
 
 * Access to the standard Python help. As of Python 2.1, a help system is
   available with access to object docstrings and the Python manuals. Simply
@@ -116,13 +117,13 @@ MAIN FEATURES
 * Search previous command history in two ways (also requires readline):
 
   - Start typing, and then use Ctrl-p (previous,up) and Ctrl-n (next,down) to
-  search through only the history items that match what you've typed so
-  far. If you use Ctrl-p/Ctrl-n at a blank prompt, they just behave like
-  normal arrow keys.
+    search through only the history items that match what you've typed so
+    far. If you use Ctrl-p/Ctrl-n at a blank prompt, they just behave like
+    normal arrow keys.
 
   - Hit Ctrl-r: opens a search prompt. Begin typing and the system searches
-  your history for lines that match what you've typed so far, completing as
-  much as it can.
+    your history for lines that match what you've typed so far, completing as
+    much as it can.
 
   - %hist: search history by index (this does *not* require readline).
 
@@ -189,52 +190,68 @@ MAIN FEATURES
 
 * Auto-parentheses and auto-quotes (adapted from Nathan Gray's LazyPython)
 
-    1. Auto-parentheses
-        Callable objects (i.e. functions, methods, etc) can be invoked like
-        this (notice the commas between the arguments):
-            In [1]: callable_ob arg1, arg2, arg3
-        and the input will be translated to this:
-            ------> callable_ob(arg1, arg2, arg3)
-        This feature is off by default (in rare cases it can produce
-        undesirable side-effects), but you can activate it at the command-line
-        by starting IPython with `--autocall 1`, set it permanently in your
-        configuration file, or turn on at runtime with `%autocall 1`.
+  1. Auto-parentheses
+        
+     Callable objects (i.e. functions, methods, etc) can be invoked like
+     this (notice the commas between the arguments)::
+       
+         In [1]: callable_ob arg1, arg2, arg3
+       
+     and the input will be translated to this::
+       
+         callable_ob(arg1, arg2, arg3)
+       
+     This feature is off by default (in rare cases it can produce
+     undesirable side-effects), but you can activate it at the command-line
+     by starting IPython with `--autocall 1`, set it permanently in your
+     configuration file, or turn on at runtime with `%autocall 1`.
 
-        You can force auto-parentheses by using '/' as the first character
-        of a line.  For example:
-            In [1]: /globals             # becomes 'globals()'
-        Note that the '/' MUST be the first character on the line!  This
-        won't work:
-            In [2]: print /globals    # syntax error
+     You can force auto-parentheses by using '/' as the first character
+     of a line.  For example::
+       
+          In [1]: /globals             # becomes 'globals()'
+       
+     Note that the '/' MUST be the first character on the line!  This
+     won't work::
+       
+          In [2]: print /globals    # syntax error
 
-        In most cases the automatic algorithm should work, so you should
-        rarely need to explicitly invoke /. One notable exception is if you
-        are trying to call a function with a list of tuples as arguments (the
-        parenthesis will confuse IPython):
-            In [1]: zip (1,2,3),(4,5,6)  # won't work
-        but this will work:
-            In [2]: /zip (1,2,3),(4,5,6)
-            ------> zip ((1,2,3),(4,5,6))
-            Out[2]= [(1, 4), (2, 5), (3, 6)]
+     In most cases the automatic algorithm should work, so you should
+     rarely need to explicitly invoke /. One notable exception is if you
+     are trying to call a function with a list of tuples as arguments (the
+     parenthesis will confuse IPython)::
+       
+          In [1]: zip (1,2,3),(4,5,6)  # won't work
+       
+     but this will work::
+       
+          In [2]: /zip (1,2,3),(4,5,6)
+          ------> zip ((1,2,3),(4,5,6))
+          Out[2]= [(1, 4), (2, 5), (3, 6)]
 
-        IPython tells you that it has altered your command line by
-        displaying the new command line preceded by -->.  e.g.:
-            In [18]: callable list
-            -------> callable (list)
+     IPython tells you that it has altered your command line by
+     displaying the new command line preceded by -->.  e.g.::
+       
+          In [18]: callable list
+          -------> callable (list)
 
-    2. Auto-Quoting
-        You can force auto-quoting of a function's arguments by using ',' as
-        the first character of a line.  For example:
-            In [1]: ,my_function /home/me   # becomes my_function("/home/me")
+  2. Auto-Quoting
+    
+     You can force auto-quoting of a function's arguments by using ',' as
+     the first character of a line.  For example::
+       
+          In [1]: ,my_function /home/me   # becomes my_function("/home/me")
 
-        If you use ';' instead, the whole argument is quoted as a single
-        string (while ',' splits on whitespace):
-            In [2]: ,my_function a b c   # becomes my_function("a","b","c")
-            In [3]: ;my_function a b c   # becomes my_function("a b c")
+     If you use ';' instead, the whole argument is quoted as a single
+     string (while ',' splits on whitespace)::
+       
+          In [2]: ,my_function a b c   # becomes my_function("a","b","c")
+          In [3]: ;my_function a b c   # becomes my_function("a b c")
 
-        Note that the ',' MUST be the first character on the line!  This
-        won't work:
-            In [4]: x = ,my_function /home/me    # syntax error
+     Note that the ',' MUST be the first character on the line!  This
+     won't work::
+       
+          In [4]: x = ,my_function /home/me    # syntax error
 """
 
 interactive_usage_min =  """\
@@ -258,8 +275,9 @@ obj?, obj??      : Get help, or more help for object (also works as
 ?foo.*abc*       : List names in 'foo' containing 'abc' in them.
 %magic           : Information about IPython's 'magic' % functions.
 
-Magic functions are prefixed by %, and typically take their arguments without
-parentheses, quotes or even commas for convenience.
+Magic functions are prefixed by % or %%, and typically take their arguments
+without parentheses, quotes or even commas for convenience.  Line magics take a
+single % and cell magics are prefixed with two %%.
 
 Example magic function calls:
 
@@ -268,6 +286,10 @@ alias d ls -F    : Works if 'alias' not a python name
 alist = %alias   : Get list of aliases to 'alist'
 cd /usr/share    : Obvious. cd -<tab> to choose from visited dirs.
 %cd??            : See help AND source for magic %cd
+%timeit x=10     : time the 'x=10' statement with high precision.
+%%timeit x=2**100
+x**100           : time 'x*100' with a setup of 'x=2**100'; setup code is not
+                   counted.  This is an example of a cell magic.
 
 System commands:
 
@@ -322,7 +344,7 @@ Multiline editing
 
 The graphical console is capable of true multiline editing, but it also tries
 to behave intuitively like a terminal when possible.  If you are used to
-IPyhton's old terminal behavior, you should find the transition painless, and
+IPython's old terminal behavior, you should find the transition painless, and
 once you learn a few basic keybindings it will be a much more efficient
 environment.
 
@@ -533,3 +555,11 @@ default_gui_banner_parts = default_banner_parts + [gui_note]
 default_banner = ''.join(default_banner_parts)
 
 default_gui_banner = ''.join(default_gui_banner_parts)
+
+# page GUI Reference, for use as a magic:
+
+def page_guiref(arg_s=None):
+    """Show a basic reference about the GUI Console."""
+    from IPython.core import page
+    page.page(gui_reference, auto_html=True)
+

@@ -85,11 +85,48 @@ ipython profile create foo --parallel # also stage parallel config files
 _main_examples = """
 ipython profile create -h  # show the help string for the create subcommand
 ipython profile list -h    # show the help string for the list subcommand
+
+ipython locate profile foo # print the path to the directory for profile 'foo'
 """
 
 #-----------------------------------------------------------------------------
 # Profile Application Class (for `ipython profile` subcommand)
 #-----------------------------------------------------------------------------
+
+
+def list_profiles_in(path):
+    """list profiles in a given root directory"""
+    files = os.listdir(path)
+    profiles = []
+    for f in files:
+        full_path = os.path.join(path, f)
+        if os.path.isdir(full_path) and f.startswith('profile_'):
+            profiles.append(f.split('_',1)[-1])
+    return profiles
+
+
+def list_bundled_profiles():
+    """list profiles that are bundled with IPython."""
+    path = os.path.join(get_ipython_package_dir(), u'config', u'profile')
+    files = os.listdir(path)
+    profiles = []
+    for profile in files:
+        full_path = os.path.join(path, profile)
+        if os.path.isdir(full_path) and profile != "__pycache__":
+            profiles.append(profile)
+    return profiles
+
+
+class ProfileLocate(BaseIPythonApplication):
+    description = """print the path an IPython profile dir"""
+    
+    def parse_command_line(self, argv=None):
+        super(ProfileLocate, self).parse_command_line(argv)
+        if self.extra_args:
+            self.profile = self.extra_args[0]
+    
+    def start(self):
+        print self.profile_dir.location
 
 
 class ProfileList(Application):
@@ -112,38 +149,18 @@ class ProfileList(Application):
         The name of the IPython directory. This directory is used for logging
         configuration (through profiles), history storage, etc. The default
         is usually $HOME/.ipython. This options can also be specified through
-        the environment variable IPYTHON_DIR.
+        the environment variable IPYTHONDIR.
         """
     )
-    
-    def _list_profiles_in(self, path):
-        """list profiles in a given root directory"""
-        files = os.listdir(path)
-        profiles = []
-        for f in files:
-            full_path = os.path.join(path, f)
-            if os.path.isdir(full_path) and f.startswith('profile_'):
-                profiles.append(f.split('_',1)[-1])
-        return profiles
-    
-    def _list_bundled_profiles(self):
-        """list profiles in a given root directory"""
-        path = os.path.join(get_ipython_package_dir(), u'config', u'profile')
-        files = os.listdir(path)
-        profiles = []
-        for profile in files:
-            full_path = os.path.join(path, profile)
-            if os.path.isdir(full_path):
-                profiles.append(profile)
-        return profiles
-    
+
+
     def _print_profiles(self, profiles):
         """print list of profiles, indented."""
         for profile in profiles:
             print '    %s' % profile
-    
+
     def list_profile_dirs(self):
-        profiles = self._list_bundled_profiles()
+        profiles = list_bundled_profiles()
         if profiles:
             print
             print "Available profiles in IPython:"
@@ -153,13 +170,13 @@ class ProfileList(Application):
             print "    into your IPython directory (%s)," % self.ipython_dir
             print "    where you can customize it."
         
-        profiles = self._list_profiles_in(self.ipython_dir)
+        profiles = list_profiles_in(self.ipython_dir)
         if profiles:
             print
             print "Available profiles in %s:" % self.ipython_dir
             self._print_profiles(profiles)
         
-        profiles = self._list_profiles_in(os.getcwdu())
+        profiles = list_profiles_in(os.getcwdu())
         if profiles:
             print
             print "Available profiles in current directory (%s):" % os.getcwdu()
@@ -274,8 +291,8 @@ class ProfileApp(Application):
     examples = _main_examples
 
     subcommands = Dict(dict(
-        create = (ProfileCreate, "Create a new profile dir with default config files"),
-        list = (ProfileList, "List existing profiles")
+        create = (ProfileCreate, ProfileCreate.description.splitlines()[0]),
+        list = (ProfileList, ProfileList.description.splitlines()[0]),
     ))
 
     def start(self):

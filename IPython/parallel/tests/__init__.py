@@ -21,7 +21,9 @@ from IPython.parallel import Client
 from IPython.parallel.apps.launcher import (LocalProcessLauncher,
                                                   ipengine_cmd_argv,
                                                   ipcontroller_cmd_argv,
-                                                  SIGKILL)
+                                                  SIGKILL,
+                                                  ProcessStateError,
+)
 
 # globals
 launchers = []
@@ -55,7 +57,7 @@ def setup():
     
     cp = TestProcessLauncher()
     cp.cmd_and_args = ipcontroller_cmd_argv + \
-                ['--profile=iptest', '--log-level=50']
+                ['--profile=iptest', '--log-level=50', '--ping=250', '--dictdb']
     cp.start()
     launchers.append(cp)
     tic = time.time()
@@ -63,14 +65,23 @@ def setup():
         if cp.poll() is not None:
             print cp.poll()
             raise RuntimeError("The test controller failed to start.")
-        elif time.time()-tic > 10:
+        elif time.time()-tic > 15:
             raise RuntimeError("Timeout waiting for the test controller to start.")
         time.sleep(0.1)
     add_engines(1)
 
-def add_engines(n=1, profile='iptest'):
+def add_engines(n=1, profile='iptest', total=False):
+    """add a number of engines to a given profile.
+    
+    If total is True, then already running engines are counted, and only
+    the additional engines necessary (if any) are started.
+    """
     rc = Client(profile=profile)
     base = len(rc)
+    
+    if total:
+        n = max(n - base, 0)
+    
     eps = []
     for i in range(n):
         ep = TestProcessLauncher()
@@ -82,7 +93,7 @@ def add_engines(n=1, profile='iptest'):
     while len(rc) < base+n:
         if any([ ep.poll() is not None for ep in eps ]):
             raise RuntimeError("A test engine failed to start.")
-        elif time.time()-tic > 10:
+        elif time.time()-tic > 15:
             raise RuntimeError("Timeout waiting for engines to connect.")
         time.sleep(.1)
         rc.spin()

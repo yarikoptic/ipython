@@ -1,4 +1,5 @@
 # encoding: utf-8
+from __future__ import print_function
 
 __docformat__ = "restructuredtext en"
 
@@ -27,26 +28,26 @@ def check_display(f):
 
 @check_display
 def print_line(char='='):
-    print char * 76
+    print(char * 76)
 
 @check_display
 def print_status(package, status):
     initial_indent = "%22s: " % package
     indent = ' ' * 24
-    print fill(str(status), width=76,
+    print(fill(str(status), width=76,
                initial_indent=initial_indent,
-               subsequent_indent=indent)
+               subsequent_indent=indent))
 
 @check_display
 def print_message(message):
     indent = ' ' * 24 + "* "
-    print fill(str(message), width=76,
+    print(fill(str(message), width=76,
                initial_indent=indent,
-               subsequent_indent=indent)
+               subsequent_indent=indent))
 
 @check_display
 def print_raw(section):
-    print section
+    print(section)
 
 #-------------------------------------------------------------------------------
 # Tests for specific packages
@@ -160,17 +161,22 @@ def check_for_pyzmq():
             return True
 
 def check_for_readline():
+    from distutils.version import LooseVersion
     try:
         import readline
     except ImportError:
         try:
             import pyreadline
-        except ImportError:
+            vs = pyreadline.release.version
+        except (ImportError, AttributeError):
             print_status('readline', "no (required for good interactive behavior)")
             return False
-        else:
-            print_status('readline', "yes pyreadline-"+pyreadline.release.version)
+        if LooseVersion(vs).version >= [1,7,1]:
+            print_status('readline', "yes pyreadline-" + vs)
             return True
+        else:
+            print_status('readline', "no pyreadline-%s < 1.7.1" % vs)
+            return False
     else:
         print_status('readline', "yes")
         return True

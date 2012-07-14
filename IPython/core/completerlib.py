@@ -83,10 +83,15 @@ def module_list(path):
     pjoin = os.path.join
     basename = os.path.basename
 
+    def is_importable_file(path):
+        """Returns True if the provided path is a valid importable module"""
+        name, extension = os.path.splitext( path )
+        return import_re.match(path) and py3compat.isidentifier(name)
+
     # Now find actual path matches for packages or modules
     folder_list = [p for p in folder_list
                    if isfile(pjoin(path, p,'__init__.py'))
-                   or import_re.match(p) ]
+                   or is_importable_file(p) ]
 
     return [basename(p).split('.')[0] for p in folder_list]
 
@@ -183,7 +188,6 @@ def quick_completer(cmd, completions):
         return completions
 
     get_ipython().set_hook('complete_command',do_complete, str_key = cmd)
-
 
 def module_completion(line):
     """
@@ -319,3 +323,7 @@ def cd_completer(self, event):
         raise TryNext
 
     return [compress_user(p, tilde_expand, tilde_val) for p in found]
+
+def reset_completer(self, event):
+    "A completer for %reset magic"
+    return '-f -s in out array dhist'.split()

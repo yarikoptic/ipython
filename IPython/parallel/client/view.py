@@ -60,8 +60,6 @@ def sync_results(f, self, *args, **kwargs):
     delta = self.outstanding.difference(self.client.outstanding)
     completed = self.outstanding.intersection(delta)
     self.outstanding = self.outstanding.difference(completed)
-    for msg_id in completed:
-        self.results[msg_id] = self.client.results[msg_id]
     return ret
 
 @decorator
@@ -122,19 +120,27 @@ class View(HasTraits):
 
     def __init__(self, client=None, socket=None, **flags):
         super(View, self).__init__(client=client, _socket=socket)
+        self.results = client.results
         self.block = client.block
 
         self.set_flags(**flags)
 
         assert not self.__class__ is View, "Don't use base View objects, use subclasses"
 
-
     def __repr__(self):
         strtargets = str(self.targets)
         if len(strtargets) > 16:
             strtargets = strtargets[:12]+'...]'
         return "<%s %s>"%(self.__class__.__name__, strtargets)
-
+    
+    def __len__(self):
+        if isinstance(self.targets, list):
+            return len(self.targets)
+        elif isinstance(self.targets, int):
+            return 1
+        else:
+            return len(self.client)
+    
     def set_flags(self, **kwargs):
         """set my attribute flags by keyword.
 
@@ -195,7 +201,7 @@ class View(HasTraits):
     @sync_results
     @save_ids
     def _really_apply(self, f, args, kwargs, block=None, **options):
-        """wrapper for client.send_apply_message"""
+        """wrapper for client.send_apply_request"""
         raise NotImplementedError("Implement in subclasses")
 
     def apply(self, f, *args, **kwargs):
@@ -401,12 +407,15 @@ class DirectView(View):
         return self.sync_imports(True)
 
     @contextmanager
-    def sync_imports(self, local=True):
+    def sync_imports(self, local=True, quiet=False):
         """Context Manager for performing simultaneous local and remote imports.
 
         'import x as y' will *not* work.  The 'as y' part will simply be ignored.
         
         If `local=True`, then the package will also be imported locally.
+        
+        If `quiet=True`, no output will be produced when attempting remote 
+        imports. 
         
         Note that remote-only (`local=False`) imports have not been implemented.
         
@@ -456,10 +465,11 @@ class DirectView(View):
             key = name+':'+','.join(fromlist or [])
             if level == -1 and key not in modules:
                 modules.add(key)
-                if fromlist:
-                    print "importing %s from %s on engine(s)"%(','.join(fromlist), name)
-                else:
-                    print "importing %s on engine(s)"%name
+                if not quiet:
+                    if fromlist:
+                        print "importing %s from %s on engine(s)"%(','.join(fromlist), name)
+                    else:
+                        print "importing %s on engine(s)"%name
                 results.append(self.apply_async(remote_import, name, fromlist, level))
             # restore override
             __builtin__.__import__ = save_import
@@ -529,7 +539,7 @@ class DirectView(View):
         msg_ids = []
         trackers = []
         for ident in _idents:
-            msg = self.client.send_apply_message(self._socket, f, args, kwargs, track=track,
+            msg = self.client.send_apply_request(self._socket, f, args, kwargs, track=track,
                                     ident=ident)
             if track:
                 trackers.append(msg['tracker'])
@@ -542,6 +552,7 @@ class DirectView(View):
             except KeyboardInterrupt:
                 pass
         return ar
+
 
     @spin_after
     def map(self, f, *sequences, **kwargs):
@@ -586,7 +597,9 @@ class DirectView(View):
         pf = ParallelFunction(self, f, block=block, **kwargs)
         return pf.map(*sequences)
 
-    def execute(self, code, targets=None, block=None):
+    @sync_results
+    @save_ids
+    def execute(self, code, silent=True, targets=None, block=None):
         """Executes `code` on `targets` in blocking or nonblocking manner.
 
         ``execute`` is always `bound` (affects engine namespace)
@@ -600,7 +613,22 @@ class DirectView(View):
                 whether or not to wait until done to return
                 default: self.block
         """
-        return self._really_apply(util._execute, args=(code,), block=block, targets=targets)
+        block = self.block if block is None else block
+        targets = self.targets if targets is None else targets
+
+        _idents = self.client._build_targets(targets)[0]
+        msg_ids = []
+        trackers = []
+        for ident in _idents:
+            msg = self.client.send_execute_request(self._socket, code, silent=silent, ident=ident)
+            msg_ids.append(msg['header']['msg_id'])
+        ar = AsyncResult(self.client, msg_ids, fname='execute', targets=targets)
+        if block:
+            try:
+                ar.get()
+            except KeyboardInterrupt:
+                pass
+        return ar
 
     def run(self, filename, targets=None, block=None):
         """Execute contents of `filename` on my engine(s).
@@ -652,7 +680,7 @@ class DirectView(View):
         # applier = self.apply_sync if block else self.apply_async
         if not isinstance(ns, dict):
             raise TypeError("Must be a dict, not %s"%type(ns))
-        return self._really_apply(util._push, (ns,), block=block, track=track, targets=targets)
+        return self._really_apply(util._push, kwargs=ns, block=block, track=track, targets=targets)
 
     def get(self, key_s):
         """get object(s) by `key_s` from remote namespace
@@ -688,6 +716,9 @@ class DirectView(View):
         block = block if block is not None else self.block
         track = track if track is not None else self.track
         targets = targets if targets is not None else self.targets
+        
+        # construct integer ID list:
+        targets = self.client._build_targets(targets)[1]
 
         mapObject = Map.dists[dist]()
         nparts = len(targets)
@@ -726,6 +757,9 @@ class DirectView(View):
         mapObject = Map.dists[dist]()
         msg_ids = []
 
+        # construct integer ID list:
+        targets = self.client._build_targets(targets)[1]
+        
         for index, engineid in enumerate(targets):
             msg_ids.extend(self.pull(key, block=False, targets=engineid).msg_ids)
 
@@ -757,33 +791,37 @@ class DirectView(View):
         return self.client.kill(targets=targets, block=block)
 
     #----------------------------------------
-    # activate for %px,%autopx magics
+    # activate for %px, %autopx, etc. magics
     #----------------------------------------
-    def activate(self):
-        """Make this `View` active for parallel magic commands.
 
-        IPython has a magic command syntax to work with `MultiEngineClient` objects.
-        In a given IPython session there is a single active one.  While
-        there can be many `Views` created and used by the user,
-        there is only one active one.  The active `View` is used whenever
-        the magic commands %px and %autopx are used.
-
-        The activate() method is called on a given `View` to make it
-        active.  Once this has been done, the magic commands can be used.
+    def activate(self, suffix=''):
+        """Activate IPython magics associated with this View
+        
+        Defines the magics `%px, %autopx, %pxresult, %%px, %pxconfig`
+        
+        Parameters
+        ----------
+        
+        suffix: str [default: '']
+            The suffix, if any, for the magics.  This allows you to have
+            multiple views associated with parallel magics at the same time.
+            
+            e.g. ``rc[::2].activate(suffix='_even')`` will give you
+            the magics ``%px_even``, ``%pxresult_even``, etc. for running magics 
+            on the even engines.
         """
-
+        
+        from IPython.parallel.client.magics import ParallelMagics
+        
         try:
             # This is injected into __builtins__.
             ip = get_ipython()
         except NameError:
-            print "The IPython parallel magics (%result, %px, %autopx) only work within IPython."
-        else:
-            pmagic = ip.plugin_manager.get_plugin('parallelmagic')
-            if pmagic is None:
-                ip.magic_load_ext('parallelmagic')
-                pmagic = ip.plugin_manager.get_plugin('parallelmagic')
-
-            pmagic.active_view = self
+            print "The IPython parallel magics (%px, etc.) only work within IPython."
+            return
+        
+        M = ParallelMagics(ip, self, suffix)
+        ip.magics_manager.register(M)
 
 
 @skip_doctest
@@ -986,7 +1024,7 @@ class LoadBalancedView(View):
         follow = self._render_dependency(follow)
         subheader = dict(after=after, follow=follow, timeout=timeout, targets=idents, retries=retries)
 
-        msg = self.client.send_apply_message(self._socket, f, args, kwargs, track=track,
+        msg = self.client.send_apply_request(self._socket, f, args, kwargs, track=track,
                                 subheader=subheader)
         tracker = None if track is False else msg['tracker']
 

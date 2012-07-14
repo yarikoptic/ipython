@@ -281,11 +281,13 @@ configuration, and by default, all profiles will be stored in the so called
 "IPython directory". The location of this directory is determined by the
 following algorithm:
 
-* If the ``ipython_dir`` command line flag is given, its value is used.
+* If the ``ipython-dir`` command line flag is given, its value is used.
 
 * If not, the value returned by :func:`IPython.utils.path.get_ipython_dir`
-  is used. This function will first look at the :envvar:`IPYTHON_DIR`
+  is used. This function will first look at the :envvar:`IPYTHONDIR`
   environment variable and then default to a platform-specific default.
+  Historical support for the :envvar:`IPYTHON_DIR` environment variable will
+  be removed in a future release.
 
 On posix systems (Linux, Unix, etc.), IPython respects the ``$XDG_CONFIG_HOME``
 part of the `XDG Base Directory`_ specification. If ``$XDG_CONFIG_HOME`` is
@@ -302,7 +304,7 @@ elsewhere.
 Once the location of the IPython directory has been determined, you need to know
 which profile you are using. For users with a single configuration, this will
 simply be 'default', and will be located in 
-:file:`<IPYTHON_DIR>/profile_default`.
+:file:`<IPYTHONDIR>/profile_default`.
 
 The next thing you need to know is what to call your configuration file. The
 basic idea is that each application has its own default configuration filename.
@@ -321,6 +323,25 @@ and you will have a default :file:`ipython_config.py` in your IPython directory
 under :file:`profile_default`. If you want the default config files for the
 :mod:`IPython.parallel` applications, add ``--parallel`` to the end of the
 command-line args.
+
+
+Locating these files
+--------------------
+
+From the command-line, you can quickly locate the IPYTHONDIR or a specific
+profile with:
+
+.. sourcecode:: bash
+
+    $> ipython locate
+    /home/you/.ipython
+    
+    $> ipython locate profile foo
+    /home/you/.ipython/profile_foo
+
+These map to the utility functions: :func:`IPython.utils.path.get_ipython_dir`
+and :func:`IPython.utils.path.locate_profile` respectively.
+
 
 .. _Profiles:
 
@@ -344,7 +365,7 @@ Let's start by showing how a profile is used:
 This tells the :command:`ipython` command line program to get its configuration
 from the "sympy" profile. The file names for various profiles do not change. The
 only difference is that profiles are named in a special way. In the case above,
-the "sympy" profile means looking for :file:`ipython_config.py` in :file:`<IPYTHON_DIR>/profile_sympy`.
+the "sympy" profile means looking for :file:`ipython_config.py` in :file:`<IPYTHONDIR>/profile_sympy`.
 
 The general pattern is this: simply create a new profile with:
 

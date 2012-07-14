@@ -19,6 +19,7 @@ from __future__ import print_function
 import os
 import sys
 import ctypes
+import msvcrt
 
 from ctypes import c_int, POINTER
 from ctypes.wintypes import LPCWSTR, HLOCAL
@@ -28,6 +29,7 @@ from subprocess import STDOUT
 from ._process_common import read_no_interrupt, process_handler, arg_split as py_arg_split
 from . import py3compat
 from . import text
+from .encoding import DEFAULT_ENCODING
 
 #-----------------------------------------------------------------------------
 # Function definitions
@@ -93,7 +95,7 @@ def _find_cmd(cmd):
 
 def _system_body(p):
     """Callback for _system."""
-    enc = text.getdefaultencoding()
+    enc = DEFAULT_ENCODING
     for line in read_no_interrupt(p.stdout).splitlines():
         line = line.decode(enc, 'replace')
         print(line, file=sys.stdout)
@@ -121,11 +123,15 @@ def system(cmd):
     utility is meant to be used extensively in IPython, where any return value
     would trigger :func:`sys.displayhook` calls.
     """
+    # The controller provides interactivity with both
+    # stdin and stdout
+    #import _process_win32_controller
+    #_process_win32_controller.system(cmd)
+
     with AvoidUNCPath() as path:
         if path is not None:
             cmd = '"pushd %s &&"%s' % (path, cmd)
         return process_handler(cmd, _system_body)
-
 
 def getoutput(cmd):
     """Return standard output of executing cmd in a shell.
@@ -148,13 +154,13 @@ def getoutput(cmd):
         out = process_handler(cmd, lambda p: p.communicate()[0], STDOUT)
 
     if out is None:
-        out = ''
-    return out
+        out = b''
+    return py3compat.bytes_to_str(out)
 
 try:
     CommandLineToArgvW = ctypes.windll.shell32.CommandLineToArgvW
     CommandLineToArgvW.arg_types = [LPCWSTR, POINTER(c_int)]
-    CommandLineToArgvW.res_types = [POINTER(LPCWSTR)]
+    CommandLineToArgvW.restype = POINTER(LPCWSTR)
     LocalFree = ctypes.windll.kernel32.LocalFree
     LocalFree.res_type = HLOCAL
     LocalFree.arg_types = [HLOCAL]
@@ -176,7 +182,7 @@ try:
         argvn = c_int()
         result_pointer = CommandLineToArgvW(py3compat.cast_unicode(commandline.lstrip()), ctypes.byref(argvn))
         result_array_type = LPCWSTR * argvn.value
-        result = [arg for arg in result_array_type.from_address(result_pointer)]
+        result = [arg for arg in result_array_type.from_address(ctypes.addressof(result_pointer.contents))]
         retval = LocalFree(result_pointer)
         return result
 except AttributeError:

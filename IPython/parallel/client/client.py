@@ -18,6 +18,7 @@ Authors:
 import os
 import json
 import sys
+from threading import Thread, Event
 import time
 import warnings
 from datetime import datetime
@@ -31,12 +32,15 @@ import zmq
 
 from IPython.config.configurable import MultipleInstanceError
 from IPython.core.application import BaseIPythonApplication
+from IPython.core.profiledir import ProfileDir, ProfileDirError
 
+from IPython.utils.coloransi import TermColors
 from IPython.utils.jsonutil import rekey
 from IPython.utils.localinterfaces import LOCAL_IPS
 from IPython.utils.path import get_ipython_dir
+from IPython.utils.py3compat import cast_bytes
 from IPython.utils.traitlets import (HasTraits, Integer, Instance, Unicode,
-                                    Dict, List, Bool, Set)
+                                    Dict, List, Bool, Set, Any)
 from IPython.external.decorator import decorator
 from IPython.external.ssh import tunnel
 
@@ -47,7 +51,6 @@ from IPython.parallel import util
 from IPython.zmq.session import Session, Message
 
 from .asyncresult import AsyncResult, AsyncHubResult
-from IPython.core.profiledir import ProfileDir, ProfileDirError
 from .view import DirectView, LoadBalancedView
 
 if sys.version_info[0] >= 3:
@@ -69,6 +72,90 @@ def spin_first(f, self, *args, **kwargs):
 #--------------------------------------------------------------------------
 # Classes
 #--------------------------------------------------------------------------
+
+
+class ExecuteReply(object):
+    """wrapper for finished Execute results"""
+    def __init__(self, msg_id, content, metadata):
+        self.msg_id = msg_id
+        self._content = content
+        self.execution_count = content['execution_count']
+        self.metadata = metadata
+    
+    def __getitem__(self, key):
+        return self.metadata[key]
+    
+    def __getattr__(self, key):
+        if key not in self.metadata:
+            raise AttributeError(key)
+        return self.metadata[key]
+    
+    def __repr__(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        text_out = pyout['data'].get('text/plain', '')
+        if len(text_out) > 32:
+            text_out = text_out[:29] + '...'
+        
+        return "<ExecuteReply[%i]: %s>" % (self.execution_count, text_out)
+    
+    def _repr_pretty_(self, p, cycle):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        text_out = pyout['data'].get('text/plain', '')
+        
+        if not text_out:
+            return
+        
+        try:
+            ip = get_ipython()
+        except NameError:
+            colors = "NoColor"
+        else:
+            colors = ip.colors
+        
+        if colors == "NoColor":
+            out = normal = ""
+        else:
+            out = TermColors.Red
+            normal = TermColors.Normal
+        
+        if '\n' in text_out and not text_out.startswith('\n'):
+            # add newline for multiline reprs
+            text_out = '\n' + text_out
+        
+        p.text(
+            out + u'Out[%i:%i]: ' % (
+                self.metadata['engine_id'], self.execution_count
+            ) + normal + text_out
+        )
+    
+    def _repr_html_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("text/html")
+    
+    def _repr_latex_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("text/latex")
+    
+    def _repr_json_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("application/json")
+    
+    def _repr_javascript_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("application/javascript")
+    
+    def _repr_png_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("image/png")
+    
+    def _repr_jpeg_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("image/jpeg")
+    
+    def _repr_svg_(self):
+        pyout = self.metadata['pyout'] or {'data':{}}
+        return pyout['data'].get("image/svg+xml")
+
 
 class Metadata(dict):
     """Subclass of dict for initializing metadata values.
@@ -96,6 +183,8 @@ class Metadata(dict):
               'pyerr' : None,
               'stdout' : '',
               'stderr' : '',
+              'outputs' : [],
+              'outputs_ready' : False,
             }
         self.update(md)
         self.update(dict(*args, **kwargs))
@@ -249,6 +338,8 @@ class Client(HasTraits):
     metadata = Instance('collections.defaultdict', (Metadata,))
     history = List()
     debug = Bool(False)
+    _spin_thread = Any()
+    _stop_spinning = Any()
 
     profile=Unicode()
     def _profile_default(self):
@@ -299,20 +390,25 @@ class Client(HasTraits):
         if context is None:
             context = zmq.Context.instance()
         self._context = context
+        self._stop_spinning = Event()
 
         self._setup_profile_dir(self.profile, profile_dir, ipython_dir)
         if self._cd is not None:
             if url_or_file is None:
                 url_or_file = pjoin(self._cd.security_dir, 'ipcontroller-client.json')
-        assert url_or_file is not None, "I can't find enough information to connect to a hub!"\
-            " Please specify at least one of url_or_file or profile."
+        if url_or_file is None:
+            raise ValueError(
+                "I can't find enough information to connect to a hub!"
+                " Please specify at least one of url_or_file or profile."
+            )
 
         if not util.is_url(url_or_file):
             # it's not a url, try for a file
             if not os.path.exists(url_or_file):
                 if self._cd:
                     url_or_file = os.path.join(self._cd.security_dir, url_or_file)
-                assert os.path.exists(url_or_file), "Not a valid connection file or url: %r"%url_or_file
+                if not os.path.exists(url_or_file):
+                    raise IOError("Connection file not found: %r" % url_or_file)
             with open(url_or_file) as f:
                 cfg = json.loads(f.read())
         else:
@@ -365,7 +461,7 @@ class Client(HasTraits):
             if os.path.isfile(exec_key):
                 extra_args['keyfile'] = exec_key
             else:
-                exec_key = util.asbytes(exec_key)
+                exec_key = cast_bytes(exec_key)
                 extra_args['key'] = exec_key
         self.session = Session(**extra_args)
 
@@ -385,6 +481,18 @@ class Client(HasTraits):
         self._queue_handlers = {'execute_reply' : self._handle_execute_reply,
                                 'apply_reply' : self._handle_apply_reply}
         self._connect(sshserver, ssh_kwargs, timeout)
+        
+        # last step: setup magics, if we are in IPython:
+        
+        try:
+            ip = get_ipython()
+        except NameError:
+            return
+        else:
+            if 'px' not in ip.magics_manager.magics:
+                # in IPython but we are the first Client.
+                # activate a default view for parallel magics.
+                self.activate()
 
     def __del__(self):
         """cleanup sockets, but _not_ context."""
@@ -463,7 +571,7 @@ class Client(HasTraits):
         if not isinstance(targets, (tuple, list, xrange)):
             raise TypeError("targets by int/slice/collection of ints only, not %s"%(type(targets)))
 
-        return [util.asbytes(self._engines[t]) for t in targets], list(targets)
+        return [cast_bytes(self._engines[t]) for t in targets], list(targets)
 
     def _connect(self, sshserver, ssh_kwargs, timeout):
         """setup all our socket connections to the cluster. This is called from
@@ -624,7 +732,30 @@ class Client(HasTraits):
                 print ("got unknown result: %s"%msg_id)
         else:
             self.outstanding.remove(msg_id)
-        self.results[msg_id] = self._unwrap_exception(msg['content'])
+
+        content = msg['content']
+        header = msg['header']
+
+        # construct metadata:
+        md = self.metadata[msg_id]
+        md.update(self._extract_metadata(header, parent, content))
+        # is this redundant?
+        self.metadata[msg_id] = md
+        
+        e_outstanding = self._outstanding_dict[md['engine_uuid']]
+        if msg_id in e_outstanding:
+            e_outstanding.remove(msg_id)
+
+        # construct result:
+        if content['status'] == 'ok':
+            self.results[msg_id] = ExecuteReply(msg_id, content, md)
+        elif content['status'] == 'aborted':
+            self.results[msg_id] = error.TaskAborted(msg_id)
+        elif content['status'] == 'resubmitted':
+            # TODO: handle resubmission
+            pass
+        else:
+            self.results[msg_id] = self._unwrap_exception(content)
 
     def _handle_apply_reply(self, msg):
         """Save the reply to an apply_request into our results."""
@@ -726,6 +857,10 @@ class Client(HasTraits):
             if self.debug:
                 pprint(msg)
             parent = msg['parent_header']
+            # ignore IOPub messages with no parent.
+            # Caused by print statements or warnings from before the first execution.
+            if not parent:
+                continue
             msg_id = parent['msg_id']
             content = msg['content']
             header = msg['header']
@@ -742,8 +877,17 @@ class Client(HasTraits):
                 md.update({'pyerr' : self._unwrap_exception(content)})
             elif msg_type == 'pyin':
                 md.update({'pyin' : content['code']})
+            elif msg_type == 'display_data':
+                md['outputs'].append(content)
+            elif msg_type == 'pyout':
+                md['pyout'] = content
+            elif msg_type == 'status':
+                # idle message comes after all outputs
+                if content['execution_state'] == 'idle':
+                    md['outputs_ready'] = True
             else:
-                md.update({msg_type : content.get('data', '')})
+                # unhandled msg_type (status, etc.)
+                pass
 
             # reduntant?
             self.metadata[msg_id] = md
@@ -778,14 +922,84 @@ class Client(HasTraits):
         # always copy:
         return list(self._ids)
 
+    def activate(self, targets='all', suffix=''):
+        """Create a DirectView and register it with IPython magics
+        
+        Defines the magics `%px, %autopx, %pxresult, %%px`
+        
+        Parameters
+        ----------
+        
+        targets: int, list of ints, or 'all'
+            The engines on which the view's magics will run
+        suffix: str [default: '']
+            The suffix, if any, for the magics.  This allows you to have
+            multiple views associated with parallel magics at the same time.
+            
+            e.g. ``rc.activate(targets=0, suffix='0')`` will give you
+            the magics ``%px0``, ``%pxresult0``, etc. for running magics just
+            on engine 0.
+        """
+        view = self.direct_view(targets)
+        view.block = True
+        view.activate(suffix)
+        return view
+
     def close(self):
         if self._closed:
             return
+        self.stop_spin_thread()
         snames = filter(lambda n: n.endswith('socket'), dir(self))
         for socket in map(lambda name: getattr(self, name), snames):
             if isinstance(socket, zmq.Socket) and not socket.closed:
                 socket.close()
         self._closed = True
+
+    def _spin_every(self, interval=1):
+        """target func for use in spin_thread"""
+        while True:
+            if self._stop_spinning.is_set():
+                return
+            time.sleep(interval)
+            self.spin()
+
+    def spin_thread(self, interval=1):
+        """call Client.spin() in a background thread on some regular interval
+        
+        This helps ensure that messages don't pile up too much in the zmq queue
+        while you are working on other things, or just leaving an idle terminal.
+        
+        It also helps limit potential padding of the `received` timestamp
+        on AsyncResult objects, used for timings.
+        
+        Parameters
+        ----------
+        
+        interval : float, optional
+            The interval on which to spin the client in the background thread
+            (simply passed to time.sleep).
+        
+        Notes
+        -----
+        
+        For precision timing, you may want to use this method to put a bound
+        on the jitter (in seconds) in `received` timestamps used
+        in AsyncResult.wall_time.
+        
+        """
+        if self._spin_thread is not None:
+            self.stop_spin_thread()
+        self._stop_spinning.clear()
+        self._spin_thread = Thread(target=self._spin_every, args=(interval,))
+        self._spin_thread.daemon = True
+        self._spin_thread.start()
+    
+    def stop_spin_thread(self):
+        """stop background spin_thread, if any"""
+        if self._spin_thread is not None:
+            self._stop_spinning.set()
+            self._spin_thread.join()
+            self._spin_thread = None
 
     def spin(self):
         """Flush any registration notifications and execution results
@@ -793,14 +1007,14 @@ class Client(HasTraits):
         """
         if self._notification_socket:
             self._flush_notifications()
+        if self._iopub_socket:
+            self._flush_iopub(self._iopub_socket)
         if self._mux_socket:
             self._flush_results(self._mux_socket)
         if self._task_socket:
             self._flush_results(self._task_socket)
         if self._control_socket:
             self._flush_control(self._control_socket)
-        if self._iopub_socket:
-            self._flush_iopub(self._iopub_socket)
         if self._query_socket:
             self._flush_ignored_hub_replies()
 
@@ -925,8 +1139,26 @@ class Client(HasTraits):
             raise error
 
     @spin_first
-    def shutdown(self, targets=None, restart=False, hub=False, block=None):
-        """Terminates one or more engine processes, optionally including the hub."""
+    def shutdown(self, targets='all', restart=False, hub=False, block=None):
+        """Terminates one or more engine processes, optionally including the hub.
+        
+        Parameters
+        ----------
+        
+        targets: list of ints or 'all' [default: all]
+            Which engines to shutdown.
+        hub: bool [default: False]
+            Whether to include the Hub.  hub=True implies targets='all'.
+        block: bool [default: self.block]
+            Whether to wait for clean shutdown replies or not.
+        restart: bool [default: False]
+            NOT IMPLEMENTED
+            whether to restart engines after shutting them down.
+        """
+        
+        if restart:
+            raise NotImplementedError("Engine restart is not yet implemented")
+        
         block = self.block if block is None else block
         if hub:
             targets = 'all'
@@ -969,14 +1201,16 @@ class Client(HasTraits):
 
         return result
 
-    def send_apply_message(self, socket, f, args=None, kwargs=None, subheader=None, track=False,
+    def send_apply_request(self, socket, f, args=None, kwargs=None, subheader=None, track=False,
                             ident=None):
         """construct and send an apply message via a socket.
 
         This is the principal method with which all engine execution is performed by views.
         """
 
-        assert not self._closed, "cannot use me anymore, I'm closed!"
+        if self._closed:
+            raise RuntimeError("Client cannot be used after its sockets have been closed")
+        
         # defaults:
         args = args if args is not None else []
         kwargs = kwargs if kwargs is not None else {}
@@ -996,6 +1230,43 @@ class Client(HasTraits):
 
         msg = self.session.send(socket, "apply_request", buffers=bufs, ident=ident,
                             subheader=subheader, track=track)
+
+        msg_id = msg['header']['msg_id']
+        self.outstanding.add(msg_id)
+        if ident:
+            # possibly routed to a specific engine
+            if isinstance(ident, list):
+                ident = ident[-1]
+            if ident in self._engines.values():
+                # save for later, in case of engine death
+                self._outstanding_dict[ident].add(msg_id)
+        self.history.append(msg_id)
+        self.metadata[msg_id]['submitted'] = datetime.now()
+
+        return msg
+
+    def send_execute_request(self, socket, code, silent=True, subheader=None, ident=None):
+        """construct and send an execute request via a socket.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("Client cannot be used after its sockets have been closed")
+        
+        # defaults:
+        subheader = subheader if subheader is not None else {}
+
+        # validate arguments
+        if not isinstance(code, basestring):
+            raise TypeError("code must be text, not %s" % type(code))
+        if not isinstance(subheader, dict):
+            raise TypeError("subheader must be dict, not %s" % type(subheader))
+        
+        content = dict(code=code, silent=bool(silent), user_variables=[], user_expressions={})
+
+
+        msg = self.session.send(socket, "execute_request", content=content, ident=ident,
+                            subheader=subheader)
 
         msg_id = msg['header']['msg_id']
         self.outstanding.add(msg_id)
@@ -1166,12 +1437,6 @@ class Client(HasTraits):
                 raise TypeError("indices must be str or int, not %r"%id)
             theids.append(id)
 
-        for msg_id in theids:
-            self.outstanding.discard(msg_id)
-            if msg_id in self.history:
-                self.history.remove(msg_id)
-            self.results.pop(msg_id, None)
-            self.metadata.pop(msg_id, None)
         content = dict(msg_ids = theids)
 
         self.session.send(self._query_socket, 'resubmit_request', content)
@@ -1183,8 +1448,10 @@ class Client(HasTraits):
         content = msg['content']
         if content['status'] != 'ok':
             raise self._unwrap_exception(content)
+        mapping = content['resubmitted']
+        new_ids = [ mapping[msg_id] for msg_id in theids ]
 
-        ar = AsyncHubResult(self, msg_ids=theids)
+        ar = AsyncHubResult(self, msg_ids=new_ids)
 
         if block:
             ar.wait()
@@ -1273,12 +1540,18 @@ class Client(HasTraits):
 
                 md = self.metadata[msg_id]
                 md.update(self._extract_metadata(header, parent, rcontent))
+                if rec.get('received'):
+                    md['received'] = rec['received']
                 md.update(iodict)
-
+                
                 if rcontent['status'] == 'ok':
-                    res,buffers = util.unserialize_object(buffers)
+                    if header['msg_type'] == 'apply_reply':
+                        res,buffers = util.unserialize_object(buffers)
+                    elif header['msg_type'] == 'execute_reply':
+                        res = ExecuteReply(msg_id, rcontent, md)
+                    else:
+                        raise KeyError("unhandled msg type: %r" % header[msg_type])
                 else:
-                    print rcontent
                     res = self._unwrap_exception(rcontent)
                     failures.append(res)
 
@@ -1286,7 +1559,7 @@ class Client(HasTraits):
                 content[msg_id] = res
 
         if len(theids) == 1 and failures:
-                raise failures[0]
+            raise failures[0]
 
         error.collect_exceptions(failures, "result_status")
         return content

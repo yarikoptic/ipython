@@ -41,7 +41,8 @@ somewhere in your configuration files or ipython command line.
 #  the file COPYING, distributed as part of this software.
 #*****************************************************************************
 
-import os, bisect
+import os
+import subprocess
 import sys
 
 from IPython.core.error import TryNext
@@ -54,7 +55,7 @@ __all__ = ['editor', 'fix_error_editor', 'synchronize_with_editor',
            'show_in_pager','pre_prompt_hook',
            'pre_run_code_hook', 'clipboard_get']
 
-def editor(self,filename, linenum=None):
+def editor(self, filename, linenum=None, wait=True):
     """Open the default editor at the given filename and linenumber.
 
     This is IPython's default editor hook, you can use it as an example to
@@ -76,7 +77,9 @@ def editor(self,filename, linenum=None):
         editor = '"%s"' % editor
 
     # Call the actual editor
-    if os.system('%s %s %s' % (editor,linemark,filename)) != 0:
+    proc = subprocess.Popen('%s %s %s' % (editor, linemark, filename),
+                            shell=True)
+    if wait and proc.wait() != 0:
         raise TryNext()
 
 import tempfile
@@ -125,27 +128,26 @@ class CommandChainDispatcher:
     def __call__(self,*args, **kw):
         """ Command chain is called just like normal func.
 
-        This will call all funcs in chain with the same args as were given to this
-        function, and return the result of first func that didn't raise
-        TryNext """
-
+        This will call all funcs in chain with the same args as were given to
+        this function, and return the result of first func that didn't raise
+        TryNext"""
+        last_exc = TryNext()
         for prio,cmd in self.chain:
             #print "prio",prio,"cmd",cmd #dbg
             try:
                 return cmd(*args, **kw)
-            except TryNext, exc:
-                if exc.args or exc.kwargs:
-                    args = exc.args
-                    kw = exc.kwargs
+            except TryNext as exc:
+                last_exc = exc
         # if no function will accept it, raise TryNext up to the caller
-        raise TryNext(*args, **kw)
+        raise last_exc
 
     def __str__(self):
         return str(self.chain)
 
     def add(self, func, priority=0):
         """ Add a func to the cmd chain with given priority """
-        bisect.insort(self.chain,(priority,func))
+        self.chain.append((priority, func))
+        self.chain.sort(key=lambda x: x[0])
 
     def __iter__(self):
         """ Return all objects in chain.

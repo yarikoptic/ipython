@@ -17,6 +17,8 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
+from __future__ import print_function
+
 from xml.dom import minidom
 
 from .displaypub import (
@@ -298,6 +300,13 @@ class HTML(DisplayObject):
 class Math(DisplayObject):
 
     def _repr_latex_(self):
+        s = self.data.strip('$')
+        return "$$%s$$" % s
+
+
+class Latex(DisplayObject):
+
+    def _repr_latex_(self):
         return self.data
 
 
@@ -337,18 +346,83 @@ class JSON(DisplayObject):
     def _repr_json_(self):
         return self.data
 
+css_t = """$("head").append($("<link/>").attr({
+  rel:  "stylesheet",
+  type: "text/css",
+  href: "%s"
+}));
+"""
+
+lib_t1 = """$.getScript("%s", function () {
+"""
+lib_t2 = """});
+"""
 
 class Javascript(DisplayObject):
 
+    def __init__(self, data=None, url=None, filename=None, lib=None, css=None):
+        """Create a Javascript display object given raw data.
+
+        When this object is returned by an expression or passed to the
+        display function, it will result in the data being displayed
+        in the frontend. If the data is a URL, the data will first be
+        downloaded and then displayed. 
+        
+        In the Notebook, the containing element will be available as `element`,
+        and jQuery will be available.  The output area starts hidden, so if
+        the js appends content to `element` that should be visible, then
+        it must call `container.show()` to unhide the area.
+
+        Parameters
+        ----------
+        data : unicode, str or bytes
+            The Javascript source code or a URL to download it from.
+        url : unicode
+            A URL to download the data from.
+        filename : unicode
+            Path to a local file to load the data from.
+        lib : list or str
+            A sequence of Javascript library URLs to load asynchronously before
+            running the source code. The full URLs of the libraries should
+            be given. A single Javascript library URL can also be given as a
+            string.
+        css: : list or str
+            A sequence of css files to load before running the source code.
+            The full URLs of the css files should be give. A single css URL
+            can also be given as a string.
+        """
+        if isinstance(lib, basestring):
+            lib = [lib]
+        elif lib is None:
+            lib = []
+        if isinstance(css, basestring):
+            css = [css]
+        elif css is None:
+            css = []
+        if not isinstance(lib, (list,tuple)):
+            raise TypeError('expected sequence, got: %r' % lib)
+        if not isinstance(css, (list,tuple)):
+            raise TypeError('expected sequence, got: %r' % css)
+        self.lib = lib
+        self.css = css
+        super(Javascript, self).__init__(data=data, url=url, filename=filename)
+
     def _repr_javascript_(self):
-        return self.data
+        r = ''
+        for c in self.css:
+            r += css_t % c
+        for l in self.lib:
+            r += lib_t1 % l
+        r += self.data
+        r += lib_t2*len(self.lib)
+        return r
 
 
 class Image(DisplayObject):
 
     _read_flags = 'rb'
 
-    def __init__(self, data=None, url=None, filename=None, format=u'png', embed=False):
+    def __init__(self, data=None, url=None, filename=None, format=u'png', embed=None):
         """Create a display an PNG/JPEG image given raw data.
 
         When this object is returned by an expression or passed to the
@@ -367,10 +441,24 @@ class Image(DisplayObject):
             The format of the image data (png/jpeg/jpg). If a filename or URL is given
             for format will be inferred from the filename extension.
         embed : bool
-            Should the image data be embedded in the notebook using a data URI (True)
-            or be loaded using an <img> tag. Set this to True if you want the image
-            to be viewable later with no internet connection. If a filename is given
-            embed is always set to True.
+            Should the image data be embedded using a data URI (True) or be
+            loaded using an <img> tag. Set this to True if you want the image
+            to be viewable later with no internet connection in the notebook.
+
+            Default is `True`, unless the keyword argument `url` is set, then
+            default value is `False`.
+
+            Note that QtConsole is not able to display images if `embed` is set to `False`
+
+        Examples
+        --------
+        # embed implicitly True, works in qtconsole and notebook
+        Image('http://www.google.fr/images/srpr/logo3w.png')
+
+        # embed implicitly False, does not works in qtconsole but works in notebook if
+        # internet connection available
+        Image(url='http://www.google.fr/images/srpr/logo3w.png')
+
         """
         if filename is not None:
             ext = self._find_ext(filename)
@@ -386,7 +474,7 @@ class Image(DisplayObject):
             if ext == u'png':
                 format = u'png'
         self.format = unicode(format).lower()
-        self.embed = True if filename is not None else embed
+        self.embed = embed if embed is not None else (url is None)
         super(Image, self).__init__(data=data, url=url, filename=filename)
 
     def reload(self):
@@ -429,6 +517,16 @@ def clear_output(stdout=True, stderr=True, other=True):
         (e.g. figures,images,HTML, any result of display()).
     """
     from IPython.core.interactiveshell import InteractiveShell
-    InteractiveShell.instance().display_pub.clear_output(
-        stdout=stdout, stderr=stderr, other=other,
-    )
+    if InteractiveShell.initialized():
+        InteractiveShell.instance().display_pub.clear_output(
+            stdout=stdout, stderr=stderr, other=other,
+        )
+    else:
+        from IPython.utils import io
+        if stdout:
+            print('\033[2K\r', file=io.stdout, end='')
+            io.stdout.flush()
+        if stderr:
+            print('\033[2K\r', file=io.stderr, end='')
+            io.stderr.flush()
+        

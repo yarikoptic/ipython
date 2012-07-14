@@ -14,9 +14,11 @@
 import re
 import sys
 import types
+from base64 import encodestring
 from datetime import datetime
 
 from IPython.utils import py3compat
+from IPython.utils.encoding import DEFAULT_ENCODING
 from IPython.utils import text
 next_attr_name = '__next__' if py3compat.PY3 else 'next'
 
@@ -88,6 +90,39 @@ def date_default(obj):
         raise TypeError("%r is not JSON serializable"%obj)
 
 
+# constants for identifying png/jpeg data
+PNG = b'\x89PNG\r\n\x1a\n'
+JPEG = b'\xff\xd8'
+
+def encode_images(format_dict):
+    """b64-encodes images in a displaypub format dict
+    
+    Perhaps this should be handled in json_clean itself?
+    
+    Parameters
+    ----------
+    
+    format_dict : dict
+        A dictionary of display data keyed by mime-type
+    
+    Returns
+    -------
+    
+    format_dict : dict
+        A copy of the same dictionary,
+        but binary image data ('image/png' or 'image/jpeg')
+        is base64-encoded.
+    
+    """
+    encoded = format_dict.copy()
+    pngdata = format_dict.get('image/png')
+    if isinstance(pngdata, bytes) and pngdata[:8] == PNG:
+        encoded['image/png'] = encodestring(pngdata).decode('ascii')
+    jpegdata = format_dict.get('image/jpeg')
+    if isinstance(jpegdata, bytes) and jpegdata[:2] == JPEG:
+        encoded['image/jpeg'] = encodestring(jpegdata).decode('ascii')
+    return encoded
+
 
 def json_clean(obj):
     """Clean an object to ensure it's safe to encode in JSON.
@@ -117,10 +152,10 @@ def json_clean(obj):
     4
     >>> json_clean(range(10))
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    >>> json_clean(dict(x=1, y=2))
-    {'y': 2, 'x': 1}
-    >>> json_clean(dict(x=1, y=2, z=[1,2,3]))
-    {'y': 2, 'x': 1, 'z': [1, 2, 3]}
+    >>> sorted(json_clean(dict(x=1, y=2)).items())
+    [('x', 1), ('y', 2)]
+    >>> sorted(json_clean(dict(x=1, y=2, z=[1,2,3])).items())
+    [('x', 1), ('y', 2), ('z', [1, 2, 3])]
     >>> json_clean(True)
     True
     """
@@ -135,7 +170,7 @@ def json_clean(obj):
         return obj
     
     if isinstance(obj, bytes):
-        return obj.decode(text.getdefaultencoding(), 'replace')
+        return obj.decode(DEFAULT_ENCODING, 'replace')
     
     if isinstance(obj, container_to_list) or (
         hasattr(obj, '__iter__') and hasattr(obj, next_attr_name)):

@@ -18,6 +18,7 @@ Authors:
 
 from __future__ import division
 
+import logging
 import os
 import tempfile
 import time
@@ -189,6 +190,42 @@ class TestDictBackend(TestCase):
         query = {'msg_id' : {'$ne' : None}}
         recs = self.db.find_records(query)
         self.assertTrue(len(recs) >= 10)
+    
+    def test_pop_safe_get(self):
+        """editing query results shouldn't affect record [get]"""
+        msg_id = self.db.get_history()[-1]
+        rec = self.db.get_record(msg_id)
+        rec.pop('buffers')
+        rec['garbage'] = 'hello'
+        rec['header']['msg_id'] = 'fubar'
+        rec2 = self.db.get_record(msg_id)
+        self.assertTrue('buffers' in rec2)
+        self.assertFalse('garbage' in rec2)
+        self.assertEquals(rec2['header']['msg_id'], msg_id)
+    
+    def test_pop_safe_find(self):
+        """editing query results shouldn't affect record [find]"""
+        msg_id = self.db.get_history()[-1]
+        rec = self.db.find_records({'msg_id' : msg_id})[0]
+        rec.pop('buffers')
+        rec['garbage'] = 'hello'
+        rec['header']['msg_id'] = 'fubar'
+        rec2 = self.db.find_records({'msg_id' : msg_id})[0]
+        self.assertTrue('buffers' in rec2)
+        self.assertFalse('garbage' in rec2)
+        self.assertEquals(rec2['header']['msg_id'], msg_id)
+
+    def test_pop_safe_find_keys(self):
+        """editing query results shouldn't affect record [find+keys]"""
+        msg_id = self.db.get_history()[-1]
+        rec = self.db.find_records({'msg_id' : msg_id}, keys=['buffers', 'header'])[0]
+        rec.pop('buffers')
+        rec['garbage'] = 'hello'
+        rec['header']['msg_id'] = 'fubar'
+        rec2 = self.db.find_records({'msg_id' : msg_id})[0]
+        self.assertTrue('buffers' in rec2)
+        self.assertFalse('garbage' in rec2)
+        self.assertEquals(rec2['header']['msg_id'], msg_id)
 
 
 class TestSQLiteBackend(TestDictBackend):
@@ -196,7 +233,9 @@ class TestSQLiteBackend(TestDictBackend):
     @dec.skip_without('sqlite3')
     def create_db(self):
         location, fname = os.path.split(temp_db)
-        return SQLiteDB(location=location, fname=fname)
+        log = logging.getLogger('test')
+        log.setLevel(logging.CRITICAL)
+        return SQLiteDB(location=location, fname=fname, log=log)
     
     def tearDown(self):
         self.db._db.close()

@@ -43,21 +43,20 @@ IPython.utils = (function (IPython) {
     ansi_colormap = {
         "30":"ansiblack", "31":"ansired",
         "32":"ansigreen", "33":"ansiyellow",
-        "34":"ansiblue", "35":"ansipurple","36":"ansicyan", 
+        "34":"ansiblue", "35":"ansipurple","36":"ansicyan",
         "37":"ansigrey", "01":"ansibold"
     };
 
-    // Transform ANI color escape codes into HTML <span> tags with css
+    // Transform ANSI color escape codes into HTML <span> tags with css
     // classes listed in the above ansi_colormap object. The actual color used
     // are set in the css file.
     function fixConsole(txt) {
         txt = xmlencode(txt);
-        var re = /\033\[([\d;]*?)m/;
+        var re = /\033\[([\dA-Fa-f;]*?)m/;
         var opened = false;
         var cmds = [];
         var opener = "";
         var closer = "";
-        
         while (re.test(txt)) {
             var cmds = txt.match(re)[1].split(";");
             closer = opened?"</span>":"";
@@ -73,6 +72,16 @@ IPython.utils = (function (IPython) {
         return txt;
     }
 
+    // Remove chunks that should be overridden by the effect of
+    // carriage return characters
+    function fixCarriageReturn(txt) {
+        tmp = txt;
+        do {
+            txt = tmp;
+            tmp = txt.replace(/^.*\r(?!\n)/gm, '');
+        } while (tmp.length < txt.length);
+        return txt;
+    }
 
     grow = function(element) {
         // Grow the cell by hand. This is used upon reloading from JSON, when the
@@ -90,12 +99,51 @@ IPython.utils = (function (IPython) {
         }
     };
 
+    // some keycodes that seem to be platform/browser independant
+    var keycodes ={
+                BACKSPACE:  8,
+                TAB      :  9,
+                ENTER    : 13,
+                SHIFT    : 16,
+                CTRL     : 17,
+                CONTROL  : 17,
+                ALT      : 18,
+                ESC      : 27,
+                SPACE    : 32,
+                PGUP     : 33,
+                PGDOWN   : 34,
+                LEFT_ARROW: 37,
+                LEFTARROW: 37,
+                LEFT     : 37,
+                UP_ARROW : 38,
+                UPARROW  : 38,
+                UP       : 38,
+                RIGHT_ARROW:39,
+                RIGHTARROW:39,
+                RIGHT    : 39,
+                DOWN_ARROW: 40,
+                DOWNARROW: 40,
+                DOWN     : 40,
+    };
+
+
+    points_to_pixels = function (points) {
+        // A reasonably good way of converting between points and pixels.
+        var test = $('<div style="display: none; width: 10000pt; padding:0; border:0;"></div>');
+        $(body).append(test);
+        var pixel_per_point = test.width()/10000;
+        test.remove();
+        return Math.floor(points*pixel_per_point);
+    }
+
 
     return {
         uuid : uuid,
         fixConsole : fixConsole,
-        grow : grow
+        keycodes : keycodes,
+        grow : grow,
+        fixCarriageReturn : fixCarriageReturn,
+        points_to_pixels : points_to_pixels
     };
 
 }(IPython));
-
