@@ -165,10 +165,41 @@ packages = find_packages()
 package_data = find_package_data()
 data_files = find_data_files()
 
-setup_args['cmdclass'] = {'build_py': record_commit_info('IPython')}
 setup_args['packages'] = packages
 setup_args['package_data'] = package_data
 setup_args['data_files'] = data_files
+
+#---------------------------------------------------------------------------
+# custom distutils commands
+#---------------------------------------------------------------------------
+# imports here, so they are after setuptools import if there was one
+from distutils.command.sdist import sdist
+from distutils.command.upload import upload
+
+class UploadWindowsInstallers(upload):
+
+    description = "Upload Windows installers to PyPI (only used from tools/release_windows.py)"
+    user_options = upload.user_options + [
+        ('files=', 'f', 'exe file (or glob) to upload')
+    ]
+    def initialize_options(self):
+        upload.initialize_options(self)
+        meta = self.distribution.metadata
+        base = '{name}-{version}'.format(
+            name=meta.get_name(),
+            version=meta.get_version()
+        )
+        self.files = os.path.join('dist', '%s.*.exe' % base)
+
+    def run(self):
+        for dist_file in glob(self.files):
+            self.upload_file('bdist_wininst', 'any', dist_file)
+
+setup_args['cmdclass'] = {
+    'build_py': record_commit_info('IPython'),
+    'sdist' : record_commit_info('IPython', sdist),
+    'upload_wininst' : UploadWindowsInstallers,
+}
 
 #---------------------------------------------------------------------------
 # Handle scripts, dependencies, and setuptools specific things

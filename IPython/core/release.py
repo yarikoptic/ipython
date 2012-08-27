@@ -21,10 +21,10 @@ name = 'ipython'
 # version
 _version_major = 0
 _version_minor = 13
-_version_micro = ''  # use '' for first of series, number for 1 and above
-#_version_extra = 'dev'
+_version_micro = 1  # use '' for first of series, number for 1 and above
+_version_extra = 'dev'
 #_version_extra = 'rc1'
-_version_extra = ''  # Uncomment this for full releases
+# _version_extra = ''  # Uncomment this for full releases
 
 # Construct full version string from these.
 _ver = [_version_major, _version_minor]
@@ -114,7 +114,7 @@ authors = {'Fernando' : ('Fernando Perez','fperez.net@gmail.com'),
            'Brian'    : ('Brian E Granger', 'ellisonbg@gmail.com'),
            'Min'      : ('Min Ragan-Kelley', 'benjaminrk@gmail.com'),
            'Thomas'   : ('Thomas A. Kluyver', 'takowl@gmail.com'),
-           'Jörgen'   : ('Jörgen Stenarson', 'jorgen.stenarson@bostream.nu'),
+           'Jorgen'   : ('Jorgen Stenarson', 'jorgen.stenarson@bostream.nu'),
            'Matthias' : ('Matthias Bussonnier', 'bussonniermatthias@gmail.com'),
            }
 
