@@ -12,3 +12,4 @@ docs/examples/core/ipython.desktop usr/share/applications/
 /usr/bin/ipcontroller
 /usr/bin/ipengine
 /usr/bin/iplogger
+docs/examples/core/ipython-qtconsole.desktop usr/share/applications/

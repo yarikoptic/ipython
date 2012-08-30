@@ -5,6 +5,8 @@ ipython01x (0.13.1~git33-gcfc5692-2) unstable; urgency=low
       parallel (now required for ipython notebook) within
       ipython01x package.  ipython01x-parallel is a transitional
       package now
+    - ship qtconsole also inside ipython01x package with
+      ipython01x-qtconsole being just a dummy transitional package.
   * Also created a dummy ipython01x-notebook package so people could
     easily find notebook functionality.
 

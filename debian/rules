@@ -32,11 +32,8 @@ endif
 
 override_dh_install:
 	dh_install -pipython01x \
-		--exclude="IPython/frontend/qt/" \
 		--exclude="IPython/deathrow/" \
 		--exclude="IPython/quarantine/"
-
-	dh_install -pipython01x-qtconsole IPython/frontend/qt/ usr/share/pyshared/IPython/frontend
 
 	# remove embedded arparse
 	find $(CURDIR)/debian/ipython*/usr/ -name _argparse.py -delete
