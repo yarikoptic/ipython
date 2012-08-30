@@ -72,7 +72,7 @@ override_dh_install:
 	done
 
 	# change permission on scripts
-	chmod a-x $(CURDIR)/debian/ipython*/usr/share/doc/ipython*/examples/*
+	#chmod a-x $(CURDIR)/debian/ipython*/usr/share/doc/ipython*/examples/*
 
 override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
