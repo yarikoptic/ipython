@@ -78,6 +78,7 @@ override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
 	dh_installdocs -pipython01x
 	dh_installdocs -pipython01x-parallel --link-doc=ipython01x
+	dh_installdocs -pipython01x-notebook --link-doc=ipython01x
 	dh_installdocs -pipython01x-qtconsole --link-doc=ipython01x
 	dh_installdocs -pipython01x-doc --link-doc=ipython01x
 endif

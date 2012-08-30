@@ -5,6 +5,8 @@ ipython01x (0.13.1~git33-gcfc5692-2) unstable; urgency=low
       parallel (now required for ipython notebook) within
       ipython01x package.  ipython01x-parallel is a transitional
       package now
+  * Also created a dummy ipython01x-notebook package so people could
+    easily find notebook functionality.
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 30 Aug 2012 12:45:01 -0400
 
