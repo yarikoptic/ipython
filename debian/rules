@@ -88,8 +88,7 @@ override_dh_installexamples:
 	# yoh: disabled for now since at this point link is dangling and do not want more mess with renamings
 	# dh_installexamples -pipython01x-parallel
 
-# Perform all evil 01X renaming within dh_perl, which happens before dh_python2 call
-override_dh_perl:
+override_dh_python2:
 	: # and here we are
 	: # The Module
 	{ /usr/bin/find debian/ipy* -name IPython | \
@@ -120,6 +119,8 @@ override_dh_perl:
 		while read d; do mv $$d $${d}01x; done; }
 	: # Adjust all wrappers to import IPython01X first
 	sed -i -e 's,\(from IPython\..*\),import IPython01X; \1,g' $(CURDIR)/debian/ipy*/usr/bin/*
+	: # call actual dh_python2
+	dh_python2
 
 get-orig-source-git:
 	git fetch origin
