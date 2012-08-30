@@ -46,7 +46,6 @@ Recommends: python-tornado (>= 2.1.0~),
 Conflicts: ipython-common, python2.3-ipython, python2.4-ipython
 Replaces: ipython-common, python2.3-ipython, python2.4-ipython
 Suggests: ipython01x-doc,
-          ipython01x-parallel,
           ipython01x-qtconsole,
           python-gobject,
           python-gtk2,
@@ -89,27 +88,13 @@ Description: enhanced interactive Python shell
 
 Package: ipython01x-parallel
 Architecture: all
-Depends: ipython01x (= ${binary:Version}),
-         python-zmq (>= 2.1.4),
+Priority: extra
+Depends: ipython01x (>= 0.13.1~git33-gcfc5692-2~),
          ${misc:Depends},
-         ${python:Depends}
-Conflicts: ipython-common, python2.3-ipython, python2.4-ipython
-Replaces: ipython-common, python2.3-ipython, python2.4-ipython
+Section: oldlibs
 Description: enhanced interactive Python shell
- IPython can be used as a replacement for the standard Python shell,
- or it can be used as a complete working environment for scientific
- computing (like Matlab or Mathematica) when paired with the standard
- Python scientific and numerical tools. It supports dynamic object
- introspections, numbered input/output prompts, a macro system,
- session logging, session restoring, complete system shell access,
- verbose and colored traceback reports, auto-parentheses, auto-quoting,
- and is embeddable in other Python programs.
- .
- This package contains the parallel processing facilities.
- .
- This is a non-official, custom build of IPython post 0.11 with
- workbooks support.  It provides IPython01X module thus not
- conflicting with system-wide installed IPython
+ This is a transitional package and can be safely removed
+ after the installation is complete.
 
 Package: ipython01x-doc
 Section: doc

@@ -1,3 +1,13 @@
+ipython01x (0.13.1~git33-gcfc5692-2) unstable; urgency=low
+
+  * Workaround for limitations of dh_python2 on squeeze:
+    - adopt changes in "upstream" ipython package to ship
+      parallel (now required for ipython notebook) within
+      ipython01x package.  ipython01x-parallel is a transitional
+      package now
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 30 Aug 2012 12:45:01 -0400
+
 ipython01x (0.13.1~git33-gcfc5692-1) unstable; urgency=low
 
   * Snapshot of 0.13.1 bugfix branch

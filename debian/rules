@@ -31,11 +31,11 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 endif
 
 override_dh_install:
-	dh_install -pipython01x --exclude="IPython/parallel/" \
+	dh_install -pipython01x \
 		--exclude="IPython/frontend/qt/" \
 		--exclude="IPython/deathrow/" \
 		--exclude="IPython/quarantine/"
-	dh_install -pipython01x-parallel IPython/parallel/ usr/share/pyshared/IPython
+
 	dh_install -pipython01x-qtconsole IPython/frontend/qt/ usr/share/pyshared/IPython/frontend
 
 	# remove embedded arparse
@@ -83,7 +83,7 @@ ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
 endif
 
 override_dh_installexamples:
-	dh_installexamples -pipython01x --exclude="examples/newparallel/"
+	dh_installexamples -pipython01x
 	# yoh: disabled for now since at this point link is dangling and do not want more mess with renamings
 	# dh_installexamples -pipython01x-parallel
 

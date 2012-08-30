@@ -4,6 +4,11 @@
 /usr/lib/python2.*
 /usr/share/doc/ipython/examples/core
 /usr/share/doc/ipython/examples/lib
+/usr/share/doc/ipython/examples/parallel
 /usr/share/doc/ipython/extensions
 docs/emacs/ipython.el		usr/share/emacs/site-lisp
 docs/examples/core/ipython.desktop usr/share/applications/
+/usr/bin/ipcluster
+/usr/bin/ipcontroller
+/usr/bin/ipengine
+/usr/bin/iplogger
