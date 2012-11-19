@@ -1,3 +1,9 @@
+ipython01x (0.13.1-1) neurodebian; urgency=low
+
+  * The latest bugfix release
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Mon, 19 Nov 2012 11:53:07 -0500
+
 ipython01x (0.13.1~git33-gcfc5692-2) unstable; urgency=low
 
   * Workaround for limitations of dh_python2 on squeeze:
