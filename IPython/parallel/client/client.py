@@ -804,7 +804,7 @@ class Client(HasTraits):
             msg_type = msg['header']['msg_type']
             handler = self._notification_handlers.get(msg_type, None)
             if handler is None:
-                raise Exception("Unhandled message type: %s"%msg.msg_type)
+                raise Exception("Unhandled message type: %s" % msg_type)
             else:
                 handler(msg)
             idents,msg = self.session.recv(self._notification_socket, mode=zmq.NOBLOCK)
@@ -818,7 +818,7 @@ class Client(HasTraits):
             msg_type = msg['header']['msg_type']
             handler = self._queue_handlers.get(msg_type, None)
             if handler is None:
-                raise Exception("Unhandled message type: %s"%msg.msg_type)
+                raise Exception("Unhandled message type: %s" % msg_type)
             else:
                 handler(msg)
             idents,msg = self.session.recv(sock, mode=zmq.NOBLOCK)
@@ -1155,14 +1155,17 @@ class Client(HasTraits):
             NOT IMPLEMENTED
             whether to restart engines after shutting them down.
         """
-        
+        from IPython.parallel.error import NoEnginesRegistered
         if restart:
             raise NotImplementedError("Engine restart is not yet implemented")
         
         block = self.block if block is None else block
         if hub:
             targets = 'all'
-        targets = self._build_targets(targets)[0]
+        try:
+            targets = self._build_targets(targets)[0]
+        except NoEnginesRegistered:
+            targets = []
         for t in targets:
             self.session.send(self._control_socket, 'shutdown_request',
                         content={'restart':restart},ident=t)
@@ -1550,7 +1553,7 @@ class Client(HasTraits):
                     elif header['msg_type'] == 'execute_reply':
                         res = ExecuteReply(msg_id, rcontent, md)
                     else:
-                        raise KeyError("unhandled msg type: %r" % header[msg_type])
+                        raise KeyError("unhandled msg type: %r" % header['msg_type'])
                 else:
                     res = self._unwrap_exception(rcontent)
                     failures.append(res)

@@ -624,7 +624,7 @@ class InteractiveShell(SingletonConfigurable):
         # override sys.stdout and sys.stderr themselves, you need to do that
         # *before* instantiating this class, because io holds onto
         # references to the underlying streams.
-        if sys.platform == 'win32' and self.has_readline:
+        if (sys.platform == 'win32' or sys.platform == 'cli') and self.has_readline:
             io.stdout = io.stderr = io.IOStream(self.readline._outputfile)
         else:
             io.stdout = io.IOStream(sys.stdout)
@@ -1695,7 +1695,7 @@ class InteractiveShell(SingletonConfigurable):
                 self.write_err('No traceback available to show.\n')
                 return
             
-            if etype is SyntaxError:
+            if issubclass(etype, SyntaxError):
                 # Though this won't be called by syntax errors in the input
                 # line, there may be SyntaxError cases with imported code.
                 self.showsyntaxerror(filename)
@@ -1748,7 +1748,7 @@ class InteractiveShell(SingletonConfigurable):
         """
         etype, value, last_traceback = self._get_exc_info()
 
-        if filename and etype is SyntaxError:
+        if filename and issubclass(etype, SyntaxError):
             try:
                 value.filename = filename
             except:
@@ -2009,7 +2009,7 @@ class InteractiveShell(SingletonConfigurable):
     def init_magics(self):
         from IPython.core import magics as m
         self.magics_manager = magic.MagicsManager(shell=self,
-                                   confg=self.config,
+                                   config=self.config,
                                    user_magics=m.UserMagics(self))
         self.configurables.append(self.magics_manager)
 
@@ -2206,6 +2206,10 @@ class InteractiveShell(SingletonConfigurable):
         else:
             cmd = py3compat.unicode_to_str(cmd)
             ec = os.system(cmd)
+            # The high byte is the exit code, the low byte is a signal number
+            # that we discard for now. See the docs for os.wait()
+            if ec > 255:
+                ec >>= 8
         
         # We explicitly do NOT return the subprocess status code, because
         # a non-None value would trigger :func:`sys.displayhook` calls.
@@ -2441,7 +2445,7 @@ class InteractiveShell(SingletonConfigurable):
                 # explicitly silenced, but only in short form.
                 if kw['raise_exceptions']:
                     raise
-                if status.code not in (0, None) and not kw['exit_ignore']:
+                if status.code and not kw['exit_ignore']:
                     self.showtraceback(exception_only=True)
             except:
                 if kw['raise_exceptions']:
@@ -2490,6 +2494,8 @@ class InteractiveShell(SingletonConfigurable):
         This version will never throw an exception, but instead print
         helpful error messages to the screen.
 
+        `SystemExit` exceptions with status code 0 or None are ignored.
+
         Parameters
         ----------
         mod_name : string
@@ -2498,10 +2504,14 @@ class InteractiveShell(SingletonConfigurable):
             The globals namespace.
         """
         try:
-            where.update(
-                runpy.run_module(str(mod_name), run_name="__main__",
-                                 alter_sys=True)
-                )
+            try:
+                where.update(
+                    runpy.run_module(str(mod_name), run_name="__main__",
+                                     alter_sys=True)
+                    )
+            except SystemExit as status:
+                if status.code:
+                    raise
         except:
             self.showtraceback()
             warn('Unknown failure executing module: <%s>' % mod_name)
