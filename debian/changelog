@@ -1,6 +1,8 @@
 ipython01x (0.13.2-1) neurodebian; urgency=low
 
   * Recent bugfix release
+  * Do not even ship .egg-info which might conflict with the official
+    package
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Mon, 08 Apr 2013 22:05:31 -0400
 

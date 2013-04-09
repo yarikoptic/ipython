@@ -118,6 +118,8 @@ override_dh_python2:
 	sed -i -e 's,\(from IPython\..*\),import IPython01X; \1,g' $(CURDIR)/debian/ipy*/usr/bin/*
 	: # call actual dh_python2
 	dh_python2
+	: # and remove .egg-info since they are anyways somewhat incorrect now and I do not think they are mandatory here fro ipython
+	find ./debian/ipython01x -iname *.egg-info -delete
 
 get-orig-source-git:
 	git fetch origin
