@@ -20,14 +20,19 @@ import re
 try:
     import sqlite3
 except ImportError:
-    sqlite3 = None
+    try:
+        from pysqlite2 import dbapi2 as sqlite3
+    except ImportError:
+        sqlite3 = None
 import threading
 
 # Our own packages
 from IPython.config.configurable import Configurable
 from IPython.external.decorator import decorator
 from IPython.utils.path import locate_profile
-from IPython.utils.traitlets import Bool, Dict, Instance, Integer, List, Unicode
+from IPython.utils.traitlets import (
+    Any, Bool, Dict, Instance, Integer, List, Unicode, TraitError,
+)
 from IPython.utils.warn import warn
 
 #-----------------------------------------------------------------------------
@@ -52,12 +57,43 @@ class DummyDB(object):
 
 
 @decorator
-def needs_sqlite(f,*a,**kw):
+def needs_sqlite(f, self, *a, **kw):
     """return an empty list in the absence of sqlite"""
-    if sqlite3 is None:
+    if sqlite3 is None or not self.enabled:
         return []
     else:
-        return f(*a,**kw)
+        return f(self, *a, **kw)
+
+
+if sqlite3 is not None:
+    DatabaseError = sqlite3.DatabaseError
+else:
+    class DatabaseError(Exception):
+        "Dummy exception when sqlite could not be imported. Should never occur."
+
+@decorator
+def catch_corrupt_db(f, self, *a, **kw):
+    """A decorator which wraps HistoryAccessor method calls to catch errors from
+    a corrupt SQLite database, move the old database out of the way, and create
+    a new one.
+    """
+    try:
+        return f(self, *a, **kw)
+    except DatabaseError:
+        if os.path.isfile(self.hist_file):
+            # Try to move the file out of the way
+            base,ext = os.path.splitext(self.hist_file)
+            newpath = base + '-corrupt' + ext
+            os.rename(self.hist_file, newpath)
+            self.init_db()
+            print("ERROR! History file wasn't a valid SQLite database.",
+            "It was moved to %s" % newpath, "and a new file created.")
+            return []
+        
+        else:
+            # The hist_file is probably :memory: or something else.
+            raise
+        
 
 
 class HistoryAccessor(Configurable):
@@ -81,14 +117,38 @@ class HistoryAccessor(Configurable):
             ipython --HistoryManager.hist_file=/tmp/ipython_hist.sqlite
         
         """)
+    
+    enabled = Bool(True, config=True,
+        help="""enable the SQLite history
+        
+        set enabled=False to disable the SQLite history,
+        in which case there will be no stored history, no SQLite connection,
+        and no background saving thread.  This may be necessary in some
+        threaded environments where IPython is embedded.
+        """
+    )
+    
+    connection_options = Dict(config=True,
+        help="""Options for configuring the SQLite connection
+        
+        These options are passed as keyword args to sqlite3.connect
+        when establishing database conenctions.
+        """
+    )
 
     # The SQLite database
-    if sqlite3:
-        db = Instance(sqlite3.Connection)
-    else:
-        db = Instance(DummyDB)
+    db = Any()
+    def _db_changed(self, name, old, new):
+        """validate the db, since it can be an Instance of two different types"""
+        connection_types = (DummyDB,)
+        if sqlite3 is not None:
+            connection_types = (DummyDB, sqlite3.Connection)
+        if not isinstance(new, connection_types):
+            msg = "%s.db must be sqlite3 Connection or DummyDB, not %r" % \
+                    (self.__class__.__name__, new)
+            raise TraitError(msg)
     
-    def __init__(self, profile='default', hist_file=u'', config=None, **traits):
+    def __init__(self, profile='default', hist_file=u'', **traits):
         """Create a new history accessor.
         
         Parameters
@@ -102,7 +162,7 @@ class HistoryAccessor(Configurable):
           Config object. hist_file can also be set through this.
         """
         # We need a pointer back to the shell for various tasks.
-        super(HistoryAccessor, self).__init__(config=config, **traits)
+        super(HistoryAccessor, self).__init__(**traits)
         # defer setting hist_file from kwarg until after init,
         # otherwise the default kwarg value would clobber any value
         # set by config
@@ -113,25 +173,11 @@ class HistoryAccessor(Configurable):
             # No one has set the hist_file, yet.
             self.hist_file = self._get_hist_file_name(profile)
 
-        if sqlite3 is None:
-            warn("IPython History requires SQLite, your history will not be saved\n")
-            self.db = DummyDB()
-            return
+        if sqlite3 is None and self.enabled:
+            warn("IPython History requires SQLite, your history will not be saved")
+            self.enabled = False
         
-        try:
-            self.init_db()
-        except sqlite3.DatabaseError:
-            if os.path.isfile(self.hist_file):
-                # Try to move the file out of the way
-                base,ext = os.path.splitext(self.hist_file)
-                newpath = base + '-corrupt' + ext
-                os.rename(self.hist_file, newpath)
-                print("ERROR! History file wasn't a valid SQLite database.",
-                "It was moved to %s" % newpath, "and a new file created.")
-                self.init_db()
-            else:
-                # The hist_file is probably :memory: or something else.
-                raise
+        self.init_db()
     
     def _get_hist_file_name(self, profile='default'):
         """Find the history file for the given profile name.
@@ -146,11 +192,17 @@ class HistoryAccessor(Configurable):
         """
         return os.path.join(locate_profile(profile), 'history.sqlite')
     
+    @catch_corrupt_db
     def init_db(self):
         """Connect to the database, and create tables if necessary."""
+        if not self.enabled:
+            self.db = DummyDB()
+            return
+        
         # use detect_types so that timestamps return datetime objects
-        self.db = sqlite3.connect(self.hist_file,
-                    detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
+        kwargs = dict(detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
+        kwargs.update(self.connection_options)
+        self.db = sqlite3.connect(self.hist_file, **kwargs)
         self.db.execute("""CREATE TABLE IF NOT EXISTS sessions (session integer
                         primary key autoincrement, start timestamp,
                         end timestamp, num_cmds integer, remark text)""")
@@ -200,6 +252,7 @@ class HistoryAccessor(Configurable):
         return cur
 
     @needs_sqlite
+    @catch_corrupt_db
     def get_session_info(self, session=0):
         """get info about a session
 
@@ -227,6 +280,7 @@ class HistoryAccessor(Configurable):
         query = "SELECT * from sessions where session == ?"
         return self.db.execute(query, (session,)).fetchone()
 
+    @catch_corrupt_db
     def get_tail(self, n=10, raw=True, output=False, include_latest=False):
         """Get the last n lines from the history database.
 
@@ -254,8 +308,9 @@ class HistoryAccessor(Configurable):
             return reversed(list(cur)[1:])
         return reversed(list(cur))
 
+    @catch_corrupt_db
     def search(self, pattern="*", raw=True, search_raw=True,
-                                                        output=False):
+               output=False, n=None, unique=False):
         """Search the database using unix glob-style matching (wildcards
         * and ?).
 
@@ -267,6 +322,11 @@ class HistoryAccessor(Configurable):
           If True, search the raw input, otherwise, the parsed input
         raw, output : bool
           See :meth:`get_range`
+        n : None or int
+          If an integer is given, it defines the limit of
+          returned entries.
+        unique : bool
+          When it is true, return only unique entries.
 
         Returns
         -------
@@ -276,9 +336,21 @@ class HistoryAccessor(Configurable):
         if output:
             tosearch = "history." + tosearch
         self.writeout_cache()
-        return self._run_sql("WHERE %s GLOB ?" % tosearch, (pattern,),
-                                    raw=raw, output=output)
+        sqlform = "WHERE %s GLOB ?" % tosearch
+        params = (pattern,)
+        if unique:
+            sqlform += ' GROUP BY {0}'.format(tosearch)
+        if n is not None:
+            sqlform += " ORDER BY session DESC, line DESC LIMIT ?"
+            params += (n,)
+        elif unique:
+            sqlform += " ORDER BY session, line"
+        cur = self._run_sql(sqlform, params, raw=raw, output=output)
+        if n is not None:
+            return reversed(list(cur))
+        return cur
     
+    @catch_corrupt_db
     def get_range(self, session, start=1, stop=None, raw=True,output=False):
         """Retrieve input by session.
 
@@ -312,7 +384,7 @@ class HistoryAccessor(Configurable):
             lineclause = "line>=?"
             params = (session, start)
 
-        return self._run_sql("WHERE session==? AND %s""" % lineclause,
+        return self._run_sql("WHERE session==? AND %s" % lineclause,
                                     params, raw=raw, output=output)
 
     def get_range_by_str(self, rangestr, raw=True, output=False):
@@ -402,7 +474,7 @@ class HistoryManager(HistoryAccessor):
         self.save_flag = threading.Event()
         self.db_input_cache_lock = threading.Lock()
         self.db_output_cache_lock = threading.Lock()
-        if self.hist_file != ':memory:':
+        if self.enabled and self.hist_file != ':memory:':
             self.save_thread = HistorySavingThread(self)
             self.save_thread.start()
 
@@ -562,8 +634,9 @@ class HistoryManager(HistoryAccessor):
                    '_ii': self._ii,
                    '_iii': self._iii,
                    new_i : self._i00 }
-
-        self.shell.push(to_main, interactive=False)
+        
+        if self.shell is not None:
+            self.shell.push(to_main, interactive=False)
 
     def store_output(self, line_num):
         """If database output logging is enabled, this saves all the
@@ -638,16 +711,20 @@ class HistorySavingThread(threading.Thread):
     the cache size reaches a defined threshold."""
     daemon = True
     stop_now = False
+    enabled = True
     def __init__(self, history_manager):
         super(HistorySavingThread, self).__init__()
         self.history_manager = history_manager
+        self.enabled = history_manager.enabled
         atexit.register(self.stop)
 
     @needs_sqlite
     def run(self):
         # We need a separate db connection per thread:
         try:
-            self.db = sqlite3.connect(self.history_manager.hist_file)
+            self.db = sqlite3.connect(self.history_manager.hist_file,
+                            **self.history_manager.connection_options
+            )
             while True:
                 self.history_manager.save_flag.wait()
                 if self.stop_now:
@@ -672,7 +749,7 @@ class HistorySavingThread(threading.Thread):
 # To match, e.g. ~5/8-~2/3
 range_re = re.compile(r"""
 ((?P<startsess>~?\d+)/)?
-(?P<start>\d+)                    # Only the start line num is compulsory
+(?P<start>\d+)?
 ((?P<sep>[\-:])
  ((?P<endsess>~?\d+)/)?
  (?P<end>\d+))?
@@ -691,16 +768,25 @@ def extract_hist_ranges(ranges_str):
         rmatch = range_re.match(range_str)
         if not rmatch:
             continue
-        start = int(rmatch.group("start"))
-        end = rmatch.group("end")
-        end = int(end) if end else start+1   # If no end specified, get (a, a+1)
+        start = rmatch.group("start")
+        if start:
+            start = int(start)
+            end = rmatch.group("end")
+            # If no end specified, get (a, a + 1)
+            end = int(end) if end else start + 1
+        else:  # start not specified
+            if not rmatch.group('startsess'):  # no startsess
+                continue
+            start = 1
+            end = None  # provide the entire session hist
+
         if rmatch.group("sep") == "-":       # 1-3 == 1:4 --> [1, 2, 3]
             end += 1
         startsess = rmatch.group("startsess") or "0"
         endsess = rmatch.group("endsess") or startsess
         startsess = int(startsess.replace("~","-"))
         endsess = int(endsess.replace("~","-"))
-        assert endsess >= startsess
+        assert endsess >= startsess, "start session must be earlier than end session"
 
         if endsess == startsess:
             yield (startsess, start, end)

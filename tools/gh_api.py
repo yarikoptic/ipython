@@ -1,4 +1,4 @@
-"""Functions for Github authorisation."""
+"""Functions for Github API requests."""
 from __future__ import print_function
 
 try:
@@ -7,14 +7,34 @@ except NameError:
     pass
 
 import os
+import re
+import sys
 
 import requests
 import getpass
 import json
 
+try:
+    import requests_cache
+except ImportError:
+    print("no cache")
+else:
+    requests_cache.install_cache("gh_api")
+
 # Keyring stores passwords by a 'username', but we're not storing a username and
 # password
 fake_username = 'ipython_tools'
+
+class Obj(dict):
+    """Dictionary with attribute access to names."""
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+    
+    def __setattr__(self, name, val):
+        self[name] = val
 
 token = None
 def get_auth_token():
@@ -55,7 +75,7 @@ def make_auth_header():
 def post_issue_comment(project, num, body):
     url = 'https://api.github.com/repos/{project}/issues/{num}/comments'.format(project=project, num=num)
     payload = json.dumps({'body': body})
-    r = requests.post(url, data=payload, headers=make_auth_header())
+    requests.post(url, data=payload, headers=make_auth_header())
 
 def post_gist(content, description='', filename='file', auth=False):
     """Post some text to a Gist, and return the URL."""
@@ -75,35 +95,56 @@ def post_gist(content, description='', filename='file', auth=False):
     response_data = json.loads(response.text)
     return response_data['html_url']
     
-def get_pull_request(project, num, github_api=3):
+def get_pull_request(project, num, auth=False):
     """get pull request info  by number
-
-    github_api : version of github api to use
     """
-    if github_api==2 :
-        url = "http://github.com/api/v2/json/pulls/{project}/{num}".format(project=project, num=num)
-    elif github_api == 3:
-        url = "https://api.github.com/repos/{project}/pulls/{num}".format(project=project, num=num)
-    response = requests.get(url)
+    url = "https://api.github.com/repos/{project}/pulls/{num}".format(project=project, num=num)
+    if auth:
+        header = make_auth_header()
+    else:
+        header = None
+    response = requests.get(url, headers=header)
     response.raise_for_status()
-    if github_api == 2 :
-        return json.loads(response.text)['pull']
-    return json.loads(response.text)
+    return json.loads(response.text, object_hook=Obj)
 
-def get_pulls_list(project, github_api=3):
+element_pat = re.compile(r'<(.+?)>')
+rel_pat = re.compile(r'rel=[\'"](\w+)[\'"]')
+
+def get_paged_request(url, headers=None):
+    """get a full list, handling APIv3's paging"""
+    results = []
+    while True:
+        print("fetching %s" % url, file=sys.stderr)
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        results.extend(response.json())
+        if 'next' in response.links:
+            url = response.links['next']['url']
+        else:
+            break
+    return results
+
+def get_pulls_list(project, state="closed", auth=False):
     """get pull request list
-
-    github_api : version of github api to use
     """
-    if github_api == 3 :
-        url = "https://api.github.com/repos/{project}/pulls".format(project=project)
-    else :
-        url = "http://github.com/api/v2/json/pulls/{project}".format(project=project)
-    response = requests.get(url)
-    response.raise_for_status()
-    if github_api == 2 :
-        return json.loads(response.text)['pulls']
-    return json.loads(response.text)
+    url = "https://api.github.com/repos/{project}/pulls?state={state}&per_page=100".format(project=project, state=state)
+    if auth:
+        headers = make_auth_header()
+    else:
+        headers = None
+    pages = get_paged_request(url, headers=headers)
+    return pages
+
+def get_issues_list(project, state="closed", auth=False):
+    """get pull request list
+    """
+    url = "https://api.github.com/repos/{project}/pulls?state={state}&per_page=100".format(project=project, state=state)
+    if auth:
+        headers = make_auth_header()
+    else:
+        headers = None
+    pages = get_paged_request(url, headers=headers)
+    return pages
 
 # encode_multipart_formdata is from urllib3.filepost
 # The only change is to iter_fields, to enforce S3's required key ordering

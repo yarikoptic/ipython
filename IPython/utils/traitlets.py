@@ -28,6 +28,11 @@ We choose to create this module because we need these capabilities, but
 we need them to be pure Python so they work in all Python implementations,
 including Jython and IronPython.
 
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.utils.traitlets
+   :parts: 3
+
 Authors:
 
 * Brian Granger
@@ -115,6 +120,13 @@ def repr_type(obj):
         the_type = obj.__class__
     msg = '%r %r' % (obj, the_type)
     return msg
+
+
+def is_trait(t):
+    """ Returns whether the given value is an instance or subclass of TraitType.
+    """
+    return (isinstance(t, TraitType) or
+            (isinstance(t, type) and issubclass(t, TraitType)))
 
 
 def parse_notifier_name(name):
@@ -302,8 +314,8 @@ class TraitType(object):
     def __set__(self, obj, value):
         new_value = self._validate(obj, value)
         old_value = self.__get__(obj)
+        obj._trait_values[self.name] = new_value
         if old_value != new_value:
-            obj._trait_values[self.name] = new_value
             obj._notify_trait(self.name, old_value, new_value)
 
     def _validate(self, obj, value):
@@ -386,7 +398,7 @@ class HasTraits(object):
 
     __metaclass__ = MetaHasTraits
 
-    def __new__(cls, **kw):
+    def __new__(cls, *args, **kw):
         # This is needed because in Python 2.6 object.__new__ only accepts
         # the cls argument.
         new_meth = super(HasTraits, cls).__new__
@@ -413,7 +425,7 @@ class HasTraits(object):
 
         return inst
 
-    def __init__(self, **kw):
+    def __init__(self, *args, **kw):
         # Allow trait values to be set using keyword arguments.
         # We need to use setattr for this to trigger validation and
         # notifications.
@@ -465,7 +477,7 @@ class HasTraits(object):
 
 
     def _add_notifiers(self, handler, name):
-        if not self._trait_notifiers.has_key(name):
+        if name not in self._trait_notifiers:
             nlist = []
             self._trait_notifiers[name] = nlist
         else:
@@ -474,7 +486,7 @@ class HasTraits(object):
             nlist.append(handler)
 
     def _remove_notifiers(self, handler, name):
-        if self._trait_notifiers.has_key(name):
+        if name in self._trait_notifiers:
             nlist = self._trait_notifiers[name]
             try:
                 index = nlist.index(handler)
@@ -920,11 +932,15 @@ else:
         def validate(self, obj, value):
             if isinstance(value, int):
                 return value
-            elif isinstance(value, long):
+            if isinstance(value, long):
                 # downcast longs that fit in int:
                 # note that int(n > sys.maxint) returns a long, so
                 # we don't need a condition on this cast
                 return int(value)
+            if sys.platform == "cli":
+                from System import Int64
+                if isinstance(value, Int64):
+                    return int(value)
             self.error(obj, value)
 
 
@@ -1165,10 +1181,8 @@ class Container(Instance):
             further keys for extensions to the Trait (e.g. config)
 
         """
-        istrait = lambda t: isinstance(t, type) and issubclass(t, TraitType)
-
         # allow List([values]):
-        if default_value is None and not istrait(trait):
+        if default_value is None and not is_trait(trait):
             default_value = trait
             trait = None
 
@@ -1179,8 +1193,8 @@ class Container(Instance):
         else:
             raise TypeError('default value of %s was %s' %(self.__class__.__name__, default_value))
 
-        if istrait(trait):
-            self._trait = trait()
+        if is_trait(trait):
+            self._trait = trait() if isinstance(trait, type) else trait
             self._trait.name = 'element'
         elif trait is not None:
             raise TypeError("`trait` must be a Trait or None, got %s"%repr_type(trait))
@@ -1220,7 +1234,7 @@ class List(Container):
     """An instance of a Python list."""
     klass = list
 
-    def __init__(self, trait=None, default_value=None, minlen=0, maxlen=sys.maxint,
+    def __init__(self, trait=None, default_value=None, minlen=0, maxlen=sys.maxsize,
                 allow_none=True, **metadata):
         """Create a List trait type from a list, set, or tuple.
 
@@ -1249,7 +1263,7 @@ class List(Container):
         minlen : Int [ default 0 ]
             The minimum length of the input list
 
-        maxlen : Int [ default sys.maxint ]
+        maxlen : Int [ default sys.maxsize ]
             The maximum length of the input list
 
         allow_none : Bool [ default True ]
@@ -1327,10 +1341,8 @@ class Tuple(Container):
         default_value = metadata.pop('default_value', None)
         allow_none = metadata.pop('allow_none', True)
 
-        istrait = lambda t: isinstance(t, type) and issubclass(t, TraitType)
-
         # allow Tuple((values,)):
-        if len(traits) == 1 and default_value is None and not istrait(traits[0]):
+        if len(traits) == 1 and default_value is None and not is_trait(traits[0]):
             default_value = traits[0]
             traits = ()
 
@@ -1343,7 +1355,7 @@ class Tuple(Container):
 
         self._traits = []
         for trait in traits:
-            t = trait()
+            t = trait() if isinstance(trait, type) else trait
             t.name = 'element'
             self._traits.append(t)
 

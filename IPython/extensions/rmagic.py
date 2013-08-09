@@ -38,7 +38,6 @@ import sys
 import tempfile
 from glob import glob
 from shutil import rmtree
-from getopt import getopt
 
 # numpy and rpy2 imports
 
@@ -46,18 +45,24 @@ import numpy as np
 
 import rpy2.rinterface as ri
 import rpy2.robjects as ro
-from rpy2.robjects.numpy2ri import numpy2ri
-ro.conversion.py2ri = numpy2ri
+try:
+    from rpy2.robjects import pandas2ri
+    pandas2ri.activate()
+except ImportError:
+    pandas2ri = None
+    from rpy2.robjects import numpy2ri
+    numpy2ri.activate()
 
 # IPython imports
 
 from IPython.core.displaypub import publish_display_data
-from IPython.core.magic import (Magics, magics_class, cell_magic, line_magic,
-                                line_cell_magic)
+from IPython.core.magic import (Magics, magics_class, line_magic,
+                                line_cell_magic, needs_local_scope)
 from IPython.testing.skipdoctest import skip_doctest
 from IPython.core.magic_arguments import (
     argument, magic_arguments, parse_argstring
 )
+from IPython.external.simplegeneric import generic
 from IPython.utils.py3compat import str_to_unicode, unicode_to_str, PY3
 
 class RInterpreterError(ri.RRuntimeError):
@@ -114,19 +119,50 @@ def Rconverter(Robj, dataframe=False):
         Robj = np.rec.fromarrays(Robj, names = names)
     return np.asarray(Robj)
 
+@generic
+def pyconverter(pyobj):
+    """Convert Python objects to R objects. Add types using the decorator:
+    
+    @pyconverter.when_type
+    """
+    return pyobj
+
+# The default conversion for lists seems to make them a nested list. That has
+# some advantages, but is rarely convenient, so for interactive use, we convert
+# lists to a numpy array, which becomes an R vector.
+@pyconverter.when_type(list)
+def pyconverter_list(pyobj):
+    return np.asarray(pyobj)
+
+if pandas2ri is None:
+    # pandas2ri was new in rpy2 2.3.3, so for now we'll fallback to pandas'
+    # conversion function.
+    try:
+        from pandas import DataFrame
+        from pandas.rpy.common import convert_to_r_dataframe
+        @pyconverter.when_type(DataFrame)
+        def pyconverter_dataframe(pyobj):
+            return convert_to_r_dataframe(pyobj, strings_as_factors=True)
+    except ImportError:
+        pass
+
 @magics_class
 class RMagics(Magics):
     """A set of magics useful for interactive work with R via rpy2.
     """
 
     def __init__(self, shell, Rconverter=Rconverter,
-                 pyconverter=np.asarray,
+                 pyconverter=pyconverter,
                  cache_display_data=False):
         """
         Parameters
         ----------
 
         shell : IPython shell
+        
+        Rconverter : callable
+            To be called on values taken from R before putting them in the
+            IPython namespace.
 
         pyconverter : callable
             To be called on values in ipython namespace before 
@@ -178,8 +214,9 @@ class RMagics(Magics):
         return value
 
     @skip_doctest
+    @needs_local_scope
     @line_magic
-    def Rpush(self, line):
+    def Rpush(self, line, local_ns=None):
         '''
         A line-level magic for R that pushes
         variables from python to rpy2. The line should be made up
@@ -199,10 +236,23 @@ class RMagics(Magics):
             Out[11]: array([ 6.23333333])
 
         '''
+        if local_ns is None:
+            local_ns = {}
 
         inputs = line.split(' ')
         for input in inputs:
-            self.r.assign(input, self.pyconverter(self.shell.user_ns[input]))
+            try:
+                val = local_ns[input]
+            except KeyError:
+                try:
+                    val = self.shell.user_ns[input]
+                except KeyError:
+                    # reraise the KeyError as a NameError so that it looks like
+                    # the standard python behavior when you use an unnamed
+                    # variable
+                    raise NameError("name '%s' is not defined" % input)
+
+            self.r.assign(input, self.pyconverter(val))
 
     @skip_doctest
     @magic_arguments()
@@ -323,8 +373,12 @@ class RMagics(Magics):
         help='Convert these objects to data.frames and return as structured arrays.'
         )
     @argument(
-        '-u', '--units', type=int,
+        '-u', '--units', type=unicode, choices=["px", "in", "cm", "mm"],
         help='Units of png plotting device sent as an argument to *png* in R. One of ["px", "in", "cm", "mm"].'
+        )
+    @argument(
+        '-r', '--res', type=int,
+        help='Resolution of png plotting device sent as an argument to *png* in R. Defaults to 72 if *units* is one of ["in", "cm", "mm"].'
         )
     @argument(
         '-p', '--pointsize', type=int,
@@ -344,8 +398,9 @@ class RMagics(Magics):
         'code',
         nargs='*',
         )
+    @needs_local_scope
     @line_cell_magic
-    def R(self, line, cell=None):
+    def R(self, line, cell=None, local_ns=None):
         '''
         Execute code in R, and pull some of the results back into the Python namespace.
 
@@ -482,7 +537,8 @@ class RMagics(Magics):
 
         # arguments 'code' in line are prepended to
         # the cell lines
-        if not cell:
+
+        if cell is None:
             code = ''
             return_output = True
             line_mode = True
@@ -493,28 +549,52 @@ class RMagics(Magics):
 
         code = ' '.join(args.code) + code
 
+        # if there is no local namespace then default to an empty dict
+        if local_ns is None:
+            local_ns = {}
+
         if args.input:
             for input in ','.join(args.input).split(','):
-                self.r.assign(input, self.pyconverter(self.shell.user_ns[input]))
+                try:
+                    val = local_ns[input]
+                except KeyError:
+                    try:
+                        val = self.shell.user_ns[input]
+                    except KeyError:
+                        raise NameError("name '%s' is not defined" % input)
+                self.r.assign(input, self.pyconverter(val))
 
-        png_argdict = dict([(n, getattr(args, n)) for n in ['units', 'height', 'width', 'bg', 'pointsize']])
+        if getattr(args, 'units') is not None:
+            if args.units != "px" and getattr(args, 'res') is None:
+                args.res = 72
+            args.units = '"%s"' % args.units
+
+        png_argdict = dict([(n, getattr(args, n)) for n in ['units', 'res', 'height', 'width', 'bg', 'pointsize']])
         png_args = ','.join(['%s=%s' % (o,v) for o, v in png_argdict.items() if v is not None])
         # execute the R code in a temporary directory
 
         tmpd = tempfile.mkdtemp()
-        self.r('png("%s/Rplots%%03d.png",%s)' % (tmpd, png_args))
+        self.r('png("%s/Rplots%%03d.png",%s)' % (tmpd.replace('\\', '/'), png_args))
 
         text_output = ''
-        if line_mode:
-            for line in code.split(';'):
-                text_result, result = self.eval(line)
+        try:
+            if line_mode:
+                for line in code.split(';'):
+                    text_result, result = self.eval(line)
+                    text_output += text_result
+                if text_result:
+                    # the last line printed something to the console so we won't return it
+                    return_output = False
+            else:
+                text_result, result = self.eval(code)
                 text_output += text_result
-            if text_result:
-                # the last line printed something to the console so we won't return it
-                return_output = False
-        else:
-            text_result, result = self.eval(code)
-            text_output += text_result
+        
+        except RInterpreterError as e:
+            print(e.stdout)
+            if not e.stdout.endswith(e.err):
+                print(e.err)
+            rmtree(tmpd)
+            return
 
         self.r('dev.off()')
 
@@ -578,10 +658,10 @@ __doc__ = __doc__.format(
 )
 
 
-_loaded = False
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        ip.register_magics(RMagics)
-        _loaded = True
+    ip.register_magics(RMagics)
+    # Initialising rpy2 interferes with readline. Since, at this point, we've
+    # probably just loaded rpy2, we reset the delimiters. See issue gh-2759.
+    if ip.has_readline:
+        ip.readline.set_completer_delims(ip.readline_delims)

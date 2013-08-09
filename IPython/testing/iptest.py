@@ -24,6 +24,7 @@ itself from the command line. There are two ways of running this script:
 #-----------------------------------------------------------------------------
 # Imports
 #-----------------------------------------------------------------------------
+from __future__ import print_function
 
 # Stdlib
 import glob
@@ -56,8 +57,9 @@ from nose.core import TestProgram
 from IPython.utils import py3compat
 from IPython.utils.importstring import import_item
 from IPython.utils.path import get_ipython_module_path, get_ipython_package_dir
-from IPython.utils.process import find_cmd, pycmd2argv
+from IPython.utils.process import pycmd2argv
 from IPython.utils.sysinfo import sys_info
+from IPython.utils.tempdir import TemporaryDirectory
 from IPython.utils.warn import warn
 
 from IPython.testing import globalipapp
@@ -160,22 +162,15 @@ have['sqlite3'] = test_for('sqlite3')
 have['cython'] = test_for('Cython')
 have['oct2py'] = test_for('oct2py')
 have['tornado'] = test_for('tornado.version_info', (2,1,0), callback=None)
+have['jinja2'] = test_for('jinja2')
 have['wx'] = test_for('wx')
 have['wx.aui'] = test_for('wx.aui')
+have['azure'] = test_for('azure')
+have['sphinx'] = test_for('sphinx')
 
-if os.name == 'nt':
-    min_zmq = (2,1,7)
-else:
-    min_zmq = (2,1,4)
+min_zmq = (2,1,11)
 
-def version_tuple(mod):
-    "turn '2.1.9' into (2,1,9), and '2.1dev' into (2,1,999)"
-    # turn 'dev' into 999, because Python3 rejects str-int comparisons
-    vs = mod.__version__.replace('dev', '.999')
-    tup = tuple([int(v) for v in vs.split('.') ])
-    return tup
-
-have['zmq'] = test_for('zmq', min_zmq, version_tuple)
+have['zmq'] = test_for('zmq.pyzmq_version_info', min_zmq, callback=lambda x: x())
 
 #-----------------------------------------------------------------------------
 # Functions and classes
@@ -232,12 +227,21 @@ def make_exclude():
                   ipjoin('lib', 'inputhook'),
                   # Config files aren't really importable stand-alone
                   ipjoin('config', 'profile'),
+                  # The notebook 'static' directory contains JS, css and other
+                  # files for web serving.  Occasionally projects may put a .py
+                  # file in there (MathJax ships a conf.py), so we might as
+                  # well play it safe and skip the whole thing.
+                  ipjoin('html', 'static'),
+                  ipjoin('html', 'fabfile'),
                   ]
     if not have['sqlite3']:
         exclusions.append(ipjoin('core', 'tests', 'test_history'))
         exclusions.append(ipjoin('core', 'history'))
     if not have['wx']:
         exclusions.append(ipjoin('lib', 'inputhookwx'))
+    
+    if 'IPython.kernel.inprocess' not in sys.argv:
+        exclusions.append(ipjoin('kernel', 'inprocess'))
     
     # FIXME: temporarily disable autoreload tests, as they can produce
     # spurious failures in subsequent tests (cythonmagic).
@@ -247,7 +251,13 @@ def make_exclude():
     # We do this unconditionally, so that the test suite doesn't import
     # gtk, changing the default encoding and masking some unicode bugs.
     exclusions.append(ipjoin('lib', 'inputhookgtk'))
-    exclusions.append(ipjoin('zmq', 'gui', 'gtkembed'))
+    exclusions.append(ipjoin('kernel', 'zmq', 'gui', 'gtkembed'))
+
+    #Also done unconditionally, exclude nbconvert directories containing
+    #config files used to test.  Executing the config files with iptest would
+    #cause an exception.
+    exclusions.append(ipjoin('nbconvert', 'tests', 'files'))
+    exclusions.append(ipjoin('nbconvert', 'exporters', 'tests', 'files'))
 
     # These have to be skipped on win32 because the use echo, rm, cd, etc.
     # See ticket https://github.com/ipython/ipython/issues/87
@@ -258,18 +268,19 @@ def make_exclude():
     if not have['pexpect']:
         exclusions.extend([ipjoin('lib', 'irunner'),
                            ipjoin('lib', 'tests', 'test_irunner'),
-                           ipjoin('frontend', 'terminal', 'console'),
+                           ipjoin('terminal', 'console'),
                            ])
 
     if not have['zmq']:
-        exclusions.append(ipjoin('zmq'))
-        exclusions.append(ipjoin('frontend', 'qt'))
-        exclusions.append(ipjoin('frontend', 'html'))
-        exclusions.append(ipjoin('frontend', 'consoleapp.py'))
-        exclusions.append(ipjoin('frontend', 'terminal', 'console'))
+        exclusions.append(ipjoin('lib', 'kernel'))
+        exclusions.append(ipjoin('kernel'))
+        exclusions.append(ipjoin('qt'))
+        exclusions.append(ipjoin('html'))
+        exclusions.append(ipjoin('consoleapp.py'))
+        exclusions.append(ipjoin('terminal', 'console'))
         exclusions.append(ipjoin('parallel'))
     elif not have['qt'] or not have['pygments']:
-        exclusions.append(ipjoin('frontend', 'qt'))
+        exclusions.append(ipjoin('qt'))
 
     if not have['pymongo']:
         exclusions.append(ipjoin('parallel', 'controller', 'mongodb'))
@@ -278,7 +289,7 @@ def make_exclude():
     if not have['matplotlib']:
         exclusions.extend([ipjoin('core', 'pylabtools'),
                            ipjoin('core', 'tests', 'test_pylabtools'),
-                           ipjoin('zmq', 'pylab'),
+                           ipjoin('kernel', 'zmq', 'pylab'),
         ])
 
     if not have['cython']:
@@ -290,11 +301,20 @@ def make_exclude():
         exclusions.extend([ipjoin('extensions', 'tests', 'test_octavemagic')])
 
     if not have['tornado']:
-        exclusions.append(ipjoin('frontend', 'html'))
+        exclusions.append(ipjoin('html'))
+
+    if not have['jinja2']:
+        exclusions.append(ipjoin('html', 'notebookapp'))
 
     if not have['rpy2'] or not have['numpy']:
         exclusions.append(ipjoin('extensions', 'rmagic'))
         exclusions.append(ipjoin('extensions', 'tests', 'test_rmagic'))
+
+    if not have['azure']:
+        exclusions.append(ipjoin('html', 'services', 'notebooks', 'azurenbmanager'))
+
+    if not all((have['pygments'], have['jinja2'], have['sphinx'])):
+        exclusions.append(ipjoin('nbconvert'))
 
     # This is needed for the reg-exp to match on win32 in the ipdoctest plugin.
     if sys.platform == 'win32':
@@ -308,7 +328,7 @@ def make_exclude():
             continue
         fullpath = pjoin(parent, exclusion)
         if not os.path.exists(fullpath) and not glob.glob(fullpath + '.*'):
-            warn("Excluding nonexistent file: %r\n" % exclusion)
+            warn("Excluding nonexistent file: %r" % exclusion)
 
     return exclusions
 
@@ -322,8 +342,8 @@ class IPTester(object):
     params = None
     #: list, arguments of system call to be made to call test runner
     call_args = None
-    #: list, process ids of subprocesses we start (for cleanup)
-    pids = None
+    #: list, subprocesses we start (for cleanup)
+    processes = None
     #: str, coverage xml output file
     coverage_xml = None
 
@@ -331,7 +351,7 @@ class IPTester(object):
         """Create new test runner."""
         p = os.path
         if runner == 'iptest':
-            iptest_app = get_ipython_module_path('IPython.testing.iptest')
+            iptest_app = os.path.abspath(get_ipython_module_path('IPython.testing.iptest'))
             self.runner = pycmd2argv(iptest_app) + sys.argv[1:]
         else:
             raise Exception('Not a valid test runner: %s' % repr(runner))
@@ -346,7 +366,7 @@ class IPTester(object):
         
         # Find the section we're testing (IPython.foo)
         for sect in self.params:
-            if sect.startswith('IPython'): break
+            if sect.startswith('IPython') or sect in special_test_suites: break
         else:
             raise ValueError("Section not found", self.params)
         
@@ -364,43 +384,29 @@ class IPTester(object):
             self.call_args.remove('--with-xml-coverage')
             self.call_args = ["coverage", "run", "--source="+sect] + self.call_args[1:]
 
-        # Store pids of anything we start to clean up on deletion, if possible
-        # (on posix only, since win32 has no os.kill)
-        self.pids = []
+        # Store anything we start to clean up on deletion
+        self.processes = []
 
-    if sys.platform == 'win32':
-        def _run_cmd(self):
-            # On Windows, use os.system instead of subprocess.call, because I
-            # was having problems with subprocess and I just don't know enough
-            # about win32 to debug this reliably.  Os.system may be the 'old
-            # fashioned' way to do it, but it works just fine.  If someone
-            # later can clean this up that's fine, as long as the tests run
-            # reliably in win32.
-            # What types of problems are you having. They may be related to
-            # running Python in unboffered mode. BG.
-            for ndx, arg in enumerate(self.call_args):
-                # Enclose in quotes if necessary and legal
-                if ' ' in arg and os.path.isfile(arg) and arg[0] != '"':
-                    self.call_args[ndx] = '"%s"' % arg
-            call_args = [py3compat.cast_unicode(x) for x in self.call_args]
-            cmd = py3compat.unicode_to_str(u' '.join(call_args))
-            return os.system(cmd)
-    else:
-        def _run_cmd(self):
+    def _run_cmd(self):
+        with TemporaryDirectory() as IPYTHONDIR:
+            env = os.environ.copy()
+            env['IPYTHONDIR'] = IPYTHONDIR
             # print >> sys.stderr, '*** CMD:', ' '.join(self.call_args) # dbg
-            subp = subprocess.Popen(self.call_args)
-            self.pids.append(subp.pid)
-            # If this fails, the pid will be left in self.pids and cleaned up
-            # later, but if the wait call succeeds, then we can clear the
-            # stored pid.
+            subp = subprocess.Popen(self.call_args, env=env)
+            self.processes.append(subp)
+            # If this fails, the process will be left in self.processes and
+            # cleaned up later, but if the wait call succeeds, then we can
+            # clear the stored process.
             retcode = subp.wait()
-            self.pids.pop()
+            self.processes.pop()
             return retcode
 
     def run(self):
         """Run the stored commands"""
         try:
             retcode = self._run_cmd()
+        except KeyboardInterrupt:
+            return -signal.SIGINT
         except:
             import traceback
             traceback.print_exc()
@@ -412,31 +418,55 @@ class IPTester(object):
 
     def __del__(self):
         """Cleanup on exit by killing any leftover processes."""
+        for subp in self.processes:
+            if subp.poll() is not None:
+                continue # process is already dead
 
-        if not hasattr(os, 'kill'):
-            return
-
-        for pid in self.pids:
             try:
-                print 'Cleaning stale PID:', pid
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
+                print('Cleaning up stale PID: %d' % subp.pid)
+                subp.kill()
+            except: # (OSError, WindowsError) ?
                 # This is just a best effort, if we fail or the process was
                 # really gone, ignore it.
                 pass
+            else:
+                for i in range(10):
+                    if subp.poll() is None:
+                        time.sleep(0.1)
+                    else:
+                        break
+
+            if subp.poll() is None:
+                # The process did not die...
+                print('... failed. Manual cleanup may be required.')
 
 
-def make_runners():
+special_test_suites = {
+    'autoreload': ['IPython.extensions.autoreload', 'IPython.extensions.tests.test_autoreload'],
+}
+                
+def make_runners(inc_slow=False):
     """Define the top-level packages that need to be tested.
     """
 
     # Packages to be tested via nose, that only depend on the stdlib
-    nose_pkg_names = ['config', 'core', 'extensions', 'frontend', 'lib',
-                     'testing', 'utils', 'nbformat' ]
+    nose_pkg_names = ['config', 'core', 'extensions', 'lib', 'terminal',
+                      'testing', 'utils', 'nbformat']
 
+    if have['qt']:
+        nose_pkg_names.append('qt')
+
+    if have['tornado']:
+        nose_pkg_names.append('html')
+        
     if have['zmq']:
-        nose_pkg_names.append('zmq')
-        nose_pkg_names.append('parallel')
+        nose_pkg_names.append('kernel')
+        nose_pkg_names.append('kernel.inprocess')
+        if inc_slow:
+            nose_pkg_names.append('parallel')
+
+    if all((have['pygments'], have['jinja2'], have['sphinx'])):
+        nose_pkg_names.append('nbconvert')
 
     # For debugging this code, only load quick stuff
     #nose_pkg_names = ['core', 'extensions']  # dbg
@@ -446,6 +476,9 @@ def make_runners():
 
     # Make runners
     runners = [ (v, IPTester('iptest', params=v)) for v in nose_packages ]
+    
+    for name in special_test_suites:
+        runners.append((name, IPTester('iptest', params=name)))
 
     return runners
 
@@ -463,6 +496,12 @@ def run_iptest():
 
     warnings.filterwarnings('ignore',
         'This will be removed soon.  Use IPython.testing.util instead')
+    
+    if sys.argv[1] in special_test_suites:
+        sys.argv[1:2] = special_test_suites[sys.argv[1]]
+        special_suite = True
+    else:
+        special_suite = False
 
     argv = sys.argv + [ '--detailed-errors',  # extra info in tracebacks
 
@@ -477,6 +516,8 @@ def run_iptest():
                         # setuptools devs refuse to fix this problem!
                         '--exe',
                         ]
+    if '-a' not in argv and '-A' not in argv:
+        argv = argv + ['-a', '!crash']
 
     if nose.__version__ >= '0.11':
         # I don't fully understand why we need this one, but depending on what
@@ -491,23 +532,40 @@ def run_iptest():
 
     # use our plugin for doctesting.  It will remove the standard doctest plugin
     # if it finds it enabled
-    plugins = [IPythonDoctest(make_exclude()), KnownFailure()]
-    # We need a global ipython running in this process
-    globalipapp.start_ipython()
+    ipdt = IPythonDoctest() if special_suite else IPythonDoctest(make_exclude())
+    plugins = [ipdt, KnownFailure()]
+    
+    # We need a global ipython running in this process, but the special
+    # in-process group spawns its own IPython kernels, so for *that* group we
+    # must avoid also opening the global one (otherwise there's a conflict of
+    # singletons).  Ultimately the solution to this problem is to refactor our
+    # assumptions about what needs to be a singleton and what doesn't (app
+    # objects should, individual shells shouldn't).  But for now, this
+    # workaround allows the test suite for the inprocess module to complete.
+    if not 'IPython.kernel.inprocess' in sys.argv:
+        globalipapp.start_ipython()
+
     # Now nose can run
     TestProgram(argv=argv, addplugins=plugins)
 
 
-def run_iptestall():
+def run_iptestall(inc_slow=False):
     """Run the entire IPython test suite by calling nose and trial.
 
     This function constructs :class:`IPTester` instances for all IPython
     modules and package and then runs each of them.  This causes the modules
     and packages of IPython to be tested each in their own subprocess using
     nose.
+    
+    Parameters
+    ----------
+    
+    inc_slow : bool, optional
+      Include slow tests, like IPython.parallel. By default, these tests aren't
+      run.
     """
 
-    runners = make_runners()
+    runners = make_runners(inc_slow=inc_slow)
 
     # Run the test runners in a temporary dir so we can nuke it when finished
     # to clean up any junk files left over by accident.  This also makes it
@@ -522,11 +580,14 @@ def run_iptestall():
     t_start = time.time()
     try:
         for (name, runner) in runners:
-            print '*'*70
-            print 'IPython test group:',name
+            print('*'*70)
+            print('IPython test group:',name)
             res = runner.run()
             if res:
                 failed.append( (name, runner) )
+                if res == -signal.SIGINT:
+                    print("Interrupted")
+                    break
     finally:
         os.chdir(curdir)
     t_end = time.time()
@@ -534,38 +595,43 @@ def run_iptestall():
     nrunners = len(runners)
     nfail = len(failed)
     # summarize results
-    print
-    print '*'*70
-    print 'Test suite completed for system with the following information:'
-    print report()
-    print 'Ran %s test groups in %.3fs' % (nrunners, t_tests)
-    print
-    print 'Status:'
+    print()
+    print('*'*70)
+    print('Test suite completed for system with the following information:')
+    print(report())
+    print('Ran %s test groups in %.3fs' % (nrunners, t_tests))
+    print()
+    print('Status:')
     if not failed:
-        print 'OK'
+        print('OK')
     else:
         # If anything went wrong, point out what command to rerun manually to
         # see the actual errors and individual summary
-        print 'ERROR - %s out of %s test groups failed.' % (nfail, nrunners)
+        print('ERROR - %s out of %s test groups failed.' % (nfail, nrunners))
         for name, failed_runner in failed:
-            print '-'*40
-            print 'Runner failed:',name
-            print 'You may wish to rerun this one individually, with:'
+            print('-'*40)
+            print('Runner failed:',name)
+            print('You may wish to rerun this one individually, with:')
             failed_call_args = [py3compat.cast_unicode(x) for x in failed_runner.call_args]
-            print u' '.join(failed_call_args)
-            print
+            print(u' '.join(failed_call_args))
+            print()
         # Ensure that our exit code indicates failure
         sys.exit(1)
 
 
 def main():
     for arg in sys.argv[1:]:
-        if arg.startswith('IPython'):
+        if arg.startswith('IPython') or arg in special_test_suites:
             # This is in-process
             run_iptest()
     else:
+        if "--all" in sys.argv:
+            sys.argv.remove("--all")
+            inc_slow = True
+        else:
+            inc_slow = False
         # This starts subprocesses
-        run_iptestall()
+        run_iptestall(inc_slow=inc_slow)
 
 
 if __name__ == '__main__':

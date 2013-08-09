@@ -21,12 +21,11 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-import logging
 import os
 
-from IPython.config.application import Application, boolean_flag
+from IPython.config.application import Application
 from IPython.core.application import (
-    BaseIPythonApplication, base_flags, base_aliases
+    BaseIPythonApplication, base_flags
 )
 from IPython.core.profiledir import ProfileDir
 from IPython.utils.path import get_ipython_dir, get_ipython_package_dir
@@ -239,10 +238,10 @@ class ProfileCreate(BaseIPythonApplication):
     def init_config_files(self):
         super(ProfileCreate, self).init_config_files()
         # use local imports, since these classes may import from here
-        from IPython.frontend.terminal.ipapp import TerminalIPythonApp
+        from IPython.terminal.ipapp import TerminalIPythonApp
         apps = [TerminalIPythonApp]
         try:
-            from IPython.frontend.qt.console.qtconsoleapp import IPythonQtConsoleApp
+            from IPython.qt.console.qtconsoleapp import IPythonQtConsoleApp
         except Exception:
             # this should be ImportError, but under weird circumstances
             # this might be an AttributeError, or possibly others
@@ -251,7 +250,7 @@ class ProfileCreate(BaseIPythonApplication):
         else:
             apps.append(IPythonQtConsoleApp)
         try:
-            from IPython.frontend.html.notebook.notebookapp import NotebookApp
+            from IPython.html.notebookapp import NotebookApp
         except ImportError:
             pass
         except Exception:

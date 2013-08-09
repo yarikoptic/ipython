@@ -7,7 +7,7 @@ control to IPython.
 
 
 Provided classes
-================
+----------------
 
 The classes are (see their docstrings for further details):
 
@@ -30,9 +30,13 @@ The classes are (see their docstrings for further details):
  - ClearDemo, ClearIPDemo: mixin-enabled versions of the Demo and IPythonDemo
    classes.
 
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.lib.demo
+   :parts: 3
 
 Subclassing
-===========
+-----------
 
 The classes here all include a few methods meant to make customization by
 subclassing more convenient.  Their docstrings below have some more details:
@@ -47,7 +51,7 @@ subclassing more convenient.  Their docstrings below have some more details:
 
 
 Operation
-=========
+---------
 
 The file is run in its own empty namespace (though you can pass it a string of
 arguments as if in a command line environment, and it will see those as
@@ -100,11 +104,11 @@ place a set of stop tags; the other tags are only there to let you fine-tune
 the execution.
 
 This is probably best explained with the simple example file below.  You can
-copy this into a file named ex_demo.py, and try running it via:
+copy this into a file named ex_demo.py, and try running it via::
 
-from IPython.demo import Demo
-d = Demo('ex_demo.py')
-d()  <--- Call the d object (omit the parens if you have autocall set to 2).
+    from IPython.demo import Demo
+    d = Demo('ex_demo.py')
+    d()
 
 Each time you call the demo object, it runs the next block.  The demo object
 has a few useful methods for navigation, like again(), edit(), jump(), seek()
@@ -120,46 +124,50 @@ an IPython session, and type::
 and then follow the directions.
 
 Example
-=======
+-------
 
 The following is a very simple example of a valid demo file.
 
-#################### EXAMPLE DEMO <ex_demo.py> ###############################
-'''A simple interactive demo to illustrate the use of IPython's Demo class.'''
+::
 
-print 'Hello, welcome to an interactive IPython demo.'
+    #################### EXAMPLE DEMO <ex_demo.py> ###############################
+    '''A simple interactive demo to illustrate the use of IPython's Demo class.'''
 
-# The mark below defines a block boundary, which is a point where IPython will
-# stop execution and return to the interactive prompt. The dashes are actually
-# optional and used only as a visual aid to clearly separate blocks while
-# editing the demo code.
-# <demo> stop
+    print 'Hello, welcome to an interactive IPython demo.'
 
-x = 1
-y = 2
+    # The mark below defines a block boundary, which is a point where IPython will
+    # stop execution and return to the interactive prompt. The dashes are actually
+    # optional and used only as a visual aid to clearly separate blocks while
+    # editing the demo code.
+    # <demo> stop
 
-# <demo> stop
+    x = 1
+    y = 2
 
-# the mark below makes this block as silent
-# <demo> silent
+    # <demo> stop
 
-print 'This is a silent block, which gets executed but not printed.'
+    # the mark below makes this block as silent
+    # <demo> silent
 
-# <demo> stop
-# <demo> auto
-print 'This is an automatic block.'
-print 'It is executed without asking for confirmation, but printed.'
-z = x+y
+    print 'This is a silent block, which gets executed but not printed.'
 
-print 'z=',x
+    # <demo> stop
+    # <demo> auto
+    print 'This is an automatic block.'
+    print 'It is executed without asking for confirmation, but printed.'
+    z = x+y
 
-# <demo> stop
-# This is just another normal block.
-print 'z is now:', z
+    print 'z=',x
 
-print 'bye!'
-################### END EXAMPLE DEMO <ex_demo.py> ############################
+    # <demo> stop
+    # This is just another normal block.
+    print 'z is now:', z
+
+    print 'bye!'
+    ################### END EXAMPLE DEMO <ex_demo.py> ############################
 """
+
+from __future__ import unicode_literals
 
 #*****************************************************************************
 #     Copyright (C) 2005-2006 Fernando Perez. <Fernando.Perez@colorado.edu>
@@ -168,17 +176,16 @@ print 'bye!'
 #  the file COPYING, distributed as part of this software.
 #
 #*****************************************************************************
+from __future__ import print_function
 
 import os
 import re
 import shlex
 import sys
 
-from IPython.utils.PyColorize import Parser
 from IPython.utils import io
-from IPython.utils.io import file_read, file_readlines
 from IPython.utils.text import marquee
-
+from IPython.utils import openpy
 __all__ = ['Demo','IPythonDemo','LineDemo','IPythonLineDemo','DemoError']
 
 class DemoError(Exception): pass
@@ -263,13 +270,13 @@ class Demo(object):
             self.fobj = self.src
         else:
              # Assume it's a string or something that can be converted to one
-            self.fobj = open(self.fname)
+            self.fobj = openpy.open(self.fname)
 
     def reload(self):
         """Reload source from disk and initialize state."""
         self.fload()
 
-        self.src     = self.fobj.read()
+        self.src     = "".join(openpy.strip_encoding_cookie(self.fobj))
         src_b        = [b.strip() for b in self.re_stop.split(self.src) if b]
         self._silent = [bool(self.re_silent.findall(b)) for b in src_b]
         self._auto   = [bool(self.re_auto.findall(b)) for b in src_b]
@@ -318,7 +325,7 @@ class Demo(object):
 
         if index is None:
             if self.finished:
-                print >>io.stdout, 'Demo finished.  Use <demo_name>.reset() if you want to rerun it.'
+                print('Demo finished.  Use <demo_name>.reset() if you want to rerun it.', file=io.stdout)
                 return None
             index = self.block_index
         else:
@@ -372,7 +379,8 @@ class Demo(object):
 
         filename = self.shell.mktempfile(self.src_blocks[index])
         self.shell.hooks.editor(filename,1)
-        new_block = file_read(filename)
+        with open(filename, 'r') as f:
+            new_block = f.read()
         # update the source and colored block
         self.src_blocks[index] = new_block
         self.src_blocks_colored[index] = self.ip_colorize(new_block)
@@ -387,9 +395,9 @@ class Demo(object):
         if index is None:
             return
 
-        print >>io.stdout, self.marquee('<%s> block # %s (%s remaining)' %
-                           (self.title,index,self.nblocks-index-1))
-        print >>io.stdout,(self.src_blocks_colored[index])
+        print(self.marquee('<%s> block # %s (%s remaining)' %
+                           (self.title,index,self.nblocks-index-1)), file=io.stdout)
+        print((self.src_blocks_colored[index]), file=io.stdout)
         sys.stdout.flush()
 
     def show_all(self):
@@ -402,12 +410,12 @@ class Demo(object):
         marquee = self.marquee
         for index,block in enumerate(self.src_blocks_colored):
             if silent[index]:
-                print >>io.stdout, marquee('<%s> SILENT block # %s (%s remaining)' %
-                              (title,index,nblocks-index-1))
+                print(marquee('<%s> SILENT block # %s (%s remaining)' %
+                              (title,index,nblocks-index-1)), file=io.stdout)
             else:
-                print >>io.stdout, marquee('<%s> block # %s (%s remaining)' %
-                              (title,index,nblocks-index-1))
-            print >>io.stdout, block,
+                print(marquee('<%s> block # %s (%s remaining)' %
+                              (title,index,nblocks-index-1)), file=io.stdout)
+            print(block, end=' ', file=io.stdout)
         sys.stdout.flush()
 
     def run_cell(self,source):
@@ -432,18 +440,18 @@ class Demo(object):
             next_block = self.src_blocks[index]
             self.block_index += 1
             if self._silent[index]:
-                print >>io.stdout, marquee('Executing silent block # %s (%s remaining)' %
-                              (index,self.nblocks-index-1))
+                print(marquee('Executing silent block # %s (%s remaining)' %
+                              (index,self.nblocks-index-1)), file=io.stdout)
             else:
                 self.pre_cmd()
                 self.show(index)
                 if self.auto_all or self._auto[index]:
-                    print >>io.stdout, marquee('output:')
+                    print(marquee('output:'), file=io.stdout)
                 else:
-                    print >>io.stdout, marquee('Press <q> to quit, <Enter> to execute...'),
+                    print(marquee('Press <q> to quit, <Enter> to execute...'), end=' ', file=io.stdout)
                     ans = raw_input().strip()
                     if ans:
-                        print >>io.stdout, marquee('Block NOT executed')
+                        print(marquee('Block NOT executed'), file=io.stdout)
                         return
             try:
                 save_argv = sys.argv
@@ -462,9 +470,9 @@ class Demo(object):
             mq1 = self.marquee('END OF DEMO')
             if mq1:
                 # avoid spurious print >>io.stdout,s if empty marquees are used
-                print >>io.stdout
-                print >>io.stdout, mq1
-                print >>io.stdout, self.marquee('Use <demo_name>.reset() if you want to rerun it.')
+                print(file=io.stdout)
+                print(mq1, file=io.stdout)
+                print(self.marquee('Use <demo_name>.reset() if you want to rerun it.'), file=io.stdout)
             self.finished = True
 
     # These methods are meant to be overridden by subclasses who may wish to

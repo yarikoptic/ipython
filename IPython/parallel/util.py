@@ -43,16 +43,11 @@ from IPython.external.decorator import decorator
 
 # IPython imports
 from IPython.config.application import Application
-from IPython.utils import py3compat
-from IPython.utils.pickleutil import can, uncan, canSequence, uncanSequence
-from IPython.utils.newserialized import serialize, unserialize
-from IPython.zmq.log import EnginePUBHandler
-from IPython.zmq.serialize import (
+from IPython.utils.localinterfaces import LOCALHOST, PUBLIC_IPS
+from IPython.kernel.zmq.log import EnginePUBHandler
+from IPython.kernel.zmq.serialize import (
     unserialize_object, serialize_object, pack_apply_message, unpack_apply_message
 )
-
-if py3compat.PY3:
-    buffer = memoryview
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -192,14 +187,9 @@ def disambiguate_ip_address(ip, location=None):
     """turn multi-ip interfaces '0.0.0.0' and '*' into connectable
     ones, based on the location (default interpretation of location is localhost)."""
     if ip in ('0.0.0.0', '*'):
-        try:
-            external_ips = socket.gethostbyname_ex(socket.gethostname())[2]
-        except (socket.gaierror, IndexError):
-            # couldn't identify this machine, assume localhost
-            external_ips = []
-        if location is None or location in external_ips or not external_ips:
+        if location is None or location in PUBLIC_IPS or not PUBLIC_IPS:
             # If location is unspecified or cannot be determined, assume local
-            ip='127.0.0.1'
+            ip = LOCALHOST
         elif location:
             return location
     return ip
@@ -235,21 +225,24 @@ def interactive(f):
 @interactive
 def _push(**ns):
     """helper method for implementing `client.push` via `client.apply`"""
-    globals().update(ns)
+    user_ns = globals()
+    tmp = '_IP_PUSH_TMP_'
+    while tmp in user_ns:
+        tmp = tmp + '_'
+    try:
+        for name, value in ns.iteritems():
+            user_ns[tmp] = value
+            exec "%s = %s" % (name, tmp) in user_ns
+    finally:
+        user_ns.pop(tmp, None)
 
 @interactive
 def _pull(keys):
     """helper method for implementing `client.pull` via `client.apply`"""
-    user_ns = globals()
     if isinstance(keys, (list,tuple, set)):
-        for key in keys:
-            if not user_ns.has_key(key):
-                raise NameError("name '%s' is not defined"%key)
-        return map(user_ns.get, keys)
+        return map(lambda key: eval(key, globals()), keys)
     else:
-        if not user_ns.has_key(keys):
-            raise NameError("name '%s' is not defined"%keys)
-        return user_ns.get(keys)
+        return eval(keys, globals())
 
 @interactive
 def _execute(code):
@@ -356,3 +349,20 @@ def local_logger(logname, loglevel=logging.DEBUG):
     logger.setLevel(loglevel)
     return logger
 
+def set_hwm(sock, hwm=0):
+    """set zmq High Water Mark on a socket
+    
+    in a way that always works for various pyzmq / libzmq versions.
+    """
+    import zmq
+    
+    for key in ('HWM', 'SNDHWM', 'RCVHWM'):
+        opt = getattr(zmq, key, None)
+        if opt is None:
+            continue
+        try:
+            sock.setsockopt(opt, hwm)
+        except zmq.ZMQError:
+            pass
+
+        

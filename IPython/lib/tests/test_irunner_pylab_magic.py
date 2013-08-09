@@ -1,6 +1,7 @@
 """Test suite for pylab_import_all magic
 Modified from the irunner module but using regex.
 """
+from __future__ import print_function
 
 # Global to make tests extra verbose and help debugging
 VERBOSE = True
@@ -58,12 +59,12 @@ class RunnerTestCase(unittest.TestCase):
             if not re.match(ol1,ol2):
                 mismatch += 1
                 if VERBOSE:
-                    print '<<< line %s does not match:' % n
-                    print repr(ol1)
-                    print repr(ol2)
-                    print '>>>'
-        self.assert_(mismatch==0,'Number of mismatched lines: %s' %
-                     mismatch)
+                    print('<<< line %s does not match:' % n)
+                    print(repr(ol1))
+                    print(repr(ol2))
+                    print('>>>')
+        self.assertTrue(mismatch==0,'Number of mismatched lines: %s' %
+                        mismatch)
 
     @decorators.skipif_not_matplotlib
     @decorators.skipif(pylab_not_importable, "Likely a run without X.")
@@ -82,8 +83,8 @@ In \[1\]: from IPython\.config\.application import Application
 In \[2\]: app = Application\.instance\(\)
 In \[3\]: app\.pylab_import_all = True
 In \[4\]: pylab
-^Welcome to pylab, a matplotlib-based Python environment
-For more information, type 'help\(pylab\)'\.
+^Using matplotlib backend:
+Populating the interactive namespace from numpy and matplotlib
 In \[5\]: ip=get_ipython\(\)
 In \[6\]: \'plot\' in ip\.user_ns
 Out\[6\]: True
@@ -108,8 +109,8 @@ In \[1\]: from IPython\.config\.application import Application
 In \[2\]: app = Application\.instance\(\)
 In \[3\]: app\.pylab_import_all = False
 In \[4\]: pylab
-^Welcome to pylab, a matplotlib-based Python environment
-For more information, type 'help\(pylab\)'\.
+^Using matplotlib backend:
+Populating the interactive namespace from numpy and matplotlib
 In \[5\]: ip=get_ipython\(\)
 In \[6\]: \'plot\' in ip\.user_ns
 Out\[6\]: False

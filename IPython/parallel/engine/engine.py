@@ -24,8 +24,9 @@ from zmq.eventloop import ioloop, zmqstream
 
 from IPython.external.ssh import tunnel
 # internal
+from IPython.utils.localinterfaces import LOCALHOST
 from IPython.utils.traitlets import (
-    Instance, Dict, Integer, Type, CFloat, Unicode, CBytes, Bool
+    Instance, Dict, Integer, Type, Float, Integer, Unicode, CBytes, Bool
 )
 from IPython.utils.py3compat import cast_bytes
 
@@ -33,26 +34,32 @@ from IPython.parallel.controller.heartmonitor import Heart
 from IPython.parallel.factory import RegistrationFactory
 from IPython.parallel.util import disambiguate_url
 
-from IPython.zmq.session import Message
-from IPython.zmq.ipkernel import Kernel, IPKernelApp
+from IPython.kernel.zmq.session import Message
+from IPython.kernel.zmq.ipkernel import Kernel
+from IPython.kernel.zmq.kernelapp import IPKernelApp
 
 class EngineFactory(RegistrationFactory):
     """IPython engine"""
 
     # configurables:
-    out_stream_factory=Type('IPython.zmq.iostream.OutStream', config=True,
+    out_stream_factory=Type('IPython.kernel.zmq.iostream.OutStream', config=True,
         help="""The OutStream for handling stdout/err.
-        Typically 'IPython.zmq.iostream.OutStream'""")
-    display_hook_factory=Type('IPython.zmq.displayhook.ZMQDisplayHook', config=True,
+        Typically 'IPython.kernel.zmq.iostream.OutStream'""")
+    display_hook_factory=Type('IPython.kernel.zmq.displayhook.ZMQDisplayHook', config=True,
         help="""The class for handling displayhook.
-        Typically 'IPython.zmq.displayhook.ZMQDisplayHook'""")
+        Typically 'IPython.kernel.zmq.displayhook.ZMQDisplayHook'""")
     location=Unicode(config=True,
         help="""The location (an IP address) of the controller.  This is
         used for disambiguating URLs, to determine whether
         loopback should be used to connect or the public address.""")
-    timeout=CFloat(2,config=True,
+    timeout=Float(5.0, config=True,
         help="""The time (in seconds) to wait for the Controller to respond
         to registration requests before giving up.""")
+    max_heartbeat_misses=Integer(50, config=True,
+        help="""The maximum number of times a check for the heartbeat ping of a 
+        controller can be missed before shutting down the engine.
+        
+        If set to 0, the check is disabled.""")
     sshserver=Unicode(config=True,
         help="""The SSH server to use for tunneling connections to the Controller.""")
     sshkey=Unicode(config=True,
@@ -60,11 +67,23 @@ class EngineFactory(RegistrationFactory):
     paramiko=Bool(sys.platform == 'win32', config=True,
         help="""Whether to use paramiko instead of openssh for tunnels.""")
 
+
     # not configurable:
-    user_ns=Dict()
-    id=Integer(allow_none=True)
-    registrar=Instance('zmq.eventloop.zmqstream.ZMQStream')
-    kernel=Instance(Kernel)
+    connection_info = Dict()
+    user_ns = Dict()
+    id = Integer(allow_none=True)
+    registrar = Instance('zmq.eventloop.zmqstream.ZMQStream')
+    kernel = Instance(Kernel)
+    hb_check_period=Integer()
+    
+    # States for the heartbeat monitoring
+    # Initial values for monitored and pinged must satisfy "monitored > pinged == False" so that 
+    # during the first check no "missed" ping is reported. Must be floats for Python 3 compatibility.
+    _hb_last_pinged = 0.0
+    _hb_last_monitored = 0.0
+    _hb_missed_beats = 0
+    # The zmq Stream which receives the pings from the Heart
+    _hb_listener = None
 
     bident = CBytes()
     ident = Unicode()
@@ -96,7 +115,7 @@ class EngineFactory(RegistrationFactory):
         def connect(s, url):
             url = disambiguate_url(url, self.location)
             if self.using_ssh:
-                self.log.debug("Tunneling connection to %s via %s"%(url, self.sshserver))
+                self.log.debug("Tunneling connection to %s via %s", url, self.sshserver)
                 return tunnel.tunnel_connection(s, url, self.sshserver,
                             keyfile=self.sshkey, paramiko=self.paramiko,
                             password=password,
@@ -108,12 +127,12 @@ class EngineFactory(RegistrationFactory):
             """like connect, but don't complete the connection (for use by heartbeat)"""
             url = disambiguate_url(url, self.location)
             if self.using_ssh:
-                self.log.debug("Tunneling connection to %s via %s"%(url, self.sshserver))
+                self.log.debug("Tunneling connection to %s via %s", url, self.sshserver)
                 url,tunnelobj = tunnel.open_tunnel(url, self.sshserver,
                             keyfile=self.sshkey, paramiko=self.paramiko,
                             password=password,
                 )
-            return url
+            return str(url)
         return connect, maybe_tunnel
 
     def register(self):
@@ -128,10 +147,15 @@ class EngineFactory(RegistrationFactory):
         self.registrar = zmqstream.ZMQStream(reg, self.loop)
 
 
-        content = dict(queue=self.ident, heartbeat=self.ident, control=self.ident)
+        content = dict(uuid=self.ident)
         self.registrar.on_recv(lambda msg: self.complete_registration(msg, connect, maybe_tunnel))
         # print (self.session.key)
-        self.session.send(self.registrar, "registration_request",content=content)
+        self.session.send(self.registrar, "registration_request", content=content)
+
+    def _report_ping(self, msg):
+        """Callback for when the heartmonitor.Heart receives a ping"""
+        #self.log.debug("Received a ping: %s", msg)
+        self._hb_last_pinged = time.time()
 
     def complete_registration(self, msg, connect, maybe_tunnel):
         # print msg
@@ -140,50 +164,55 @@ class EngineFactory(RegistrationFactory):
         loop = self.loop
         identity = self.bident
         idents,msg = self.session.feed_identities(msg)
-        msg = Message(self.session.unserialize(msg))
-
-        if msg.content.status == 'ok':
-            self.id = int(msg.content.id)
+        msg = self.session.unserialize(msg)
+        content = msg['content']
+        info = self.connection_info
+        
+        def url(key):
+            """get zmq url for given channel"""
+            return str(info["interface"] + ":%i" % info[key])
+        
+        if content['status'] == 'ok':
+            self.id = int(content['id'])
 
             # launch heartbeat
-            hb_addrs = msg.content.heartbeat
-
             # possibly forward hb ports with tunnels
-            hb_addrs = [ maybe_tunnel(addr) for addr in hb_addrs ]
-            heart = Heart(*map(str, hb_addrs), heart_id=identity)
+            hb_ping = maybe_tunnel(url('hb_ping'))
+            hb_pong = maybe_tunnel(url('hb_pong'))
+            
+            hb_monitor = None
+            if self.max_heartbeat_misses > 0:
+                # Add a monitor socket which will record the last time a ping was seen
+                mon = self.context.socket(zmq.SUB)
+                mport = mon.bind_to_random_port('tcp://%s' % LOCALHOST)
+                mon.setsockopt(zmq.SUBSCRIBE, b"")
+                self._hb_listener = zmqstream.ZMQStream(mon, self.loop)
+                self._hb_listener.on_recv(self._report_ping)
+            
+            
+                hb_monitor = "tcp://%s:%i" % (LOCALHOST, mport)
+
+            heart = Heart(hb_ping, hb_pong, hb_monitor , heart_id=identity)
             heart.start()
 
-            # create Shell Streams (MUX, Task, etc.):
-            queue_addr = msg.content.mux
-            shell_addrs = [ str(queue_addr) ]
-            task_addr = msg.content.task
-            if task_addr:
-                shell_addrs.append(str(task_addr))
+            # create Shell Connections (MUX, Task, etc.):
+            shell_addrs = url('mux'), url('task')
 
-            # Uncomment this to go back to two-socket model
-            # shell_streams = []
-            # for addr in shell_addrs:
-            #     stream = zmqstream.ZMQStream(ctx.socket(zmq.ROUTER), loop)
-            #     stream.setsockopt(zmq.IDENTITY, identity)
-            #     stream.connect(disambiguate_url(addr, self.location))
-            #     shell_streams.append(stream)
-
-            # Now use only one shell stream for mux and tasks
+            # Use only one shell stream for mux and tasks
             stream = zmqstream.ZMQStream(ctx.socket(zmq.ROUTER), loop)
             stream.setsockopt(zmq.IDENTITY, identity)
             shell_streams = [stream]
             for addr in shell_addrs:
                 connect(stream, addr)
-            # end single stream-socket
 
             # control stream:
-            control_addr = str(msg.content.control)
+            control_addr = url('control')
             control_stream = zmqstream.ZMQStream(ctx.socket(zmq.ROUTER), loop)
             control_stream.setsockopt(zmq.IDENTITY, identity)
             connect(control_stream, control_addr)
 
             # create iopub stream:
-            iopub_addr = msg.content.iopub
+            iopub_addr = url('iopub')
             iopub_socket = ctx.socket(zmq.PUB)
             iopub_socket.setsockopt(zmq.IDENTITY, identity)
             connect(iopub_socket, iopub_addr)
@@ -201,17 +230,31 @@ class EngineFactory(RegistrationFactory):
                 sys.displayhook = self.display_hook_factory(self.session, iopub_socket)
                 sys.displayhook.topic = cast_bytes('engine.%i.pyout' % self.id)
 
-            self.kernel = Kernel(config=self.config, int_id=self.id, ident=self.ident, session=self.session,
+            self.kernel = Kernel(parent=self, int_id=self.id, ident=self.ident, session=self.session,
                     control_stream=control_stream, shell_streams=shell_streams, iopub_socket=iopub_socket,
                     loop=loop, user_ns=self.user_ns, log=self.log)
-
+            
             self.kernel.shell.display_pub.topic = cast_bytes('engine.%i.displaypub' % self.id)
+            
+                
+            # periodically check the heartbeat pings of the controller
+            # Should be started here and not in "start()" so that the right period can be taken 
+            # from the hubs HeartBeatMonitor.period
+            if self.max_heartbeat_misses > 0:
+                # Use a slightly bigger check period than the hub signal period to not warn unnecessary 
+                self.hb_check_period = int(content['hb_period'])+10
+                self.log.info("Starting to monitor the heartbeat signal from the hub every %i ms." , self.hb_check_period)
+                self._hb_reporter = ioloop.PeriodicCallback(self._hb_monitor, self.hb_check_period, self.loop)
+                self._hb_reporter.start()
+            else:
+                self.log.info("Monitoring of the heartbeat signal from the hub is not enabled.")
 
+            
             # FIXME: This is a hack until IPKernelApp and IPEngineApp can be fully merged
-            app = IPKernelApp(config=self.config, shell=self.kernel.shell, kernel=self.kernel, log=self.log)
+            app = IPKernelApp(parent=self, shell=self.kernel.shell, kernel=self.kernel, log=self.log)
             app.init_profile_dir()
             app.init_code()
-
+            
             self.kernel.start()
         else:
             self.log.fatal("Registration Failed: %s"%msg)
@@ -234,9 +277,29 @@ class EngineFactory(RegistrationFactory):
         time.sleep(1)
         sys.exit(255)
 
+    def _hb_monitor(self):
+        """Callback to monitor the heartbeat from the controller"""
+        self._hb_listener.flush()
+        if self._hb_last_monitored > self._hb_last_pinged:
+            self._hb_missed_beats += 1
+            self.log.warn("No heartbeat in the last %s ms (%s time(s) in a row).", self.hb_check_period, self._hb_missed_beats)
+        else:
+            #self.log.debug("Heartbeat received (after missing %s beats).", self._hb_missed_beats)
+            self._hb_missed_beats = 0
+
+        if self._hb_missed_beats >= self.max_heartbeat_misses:
+            self.log.fatal("Maximum number of heartbeats misses reached (%s times %s ms), shutting down.",
+                           self.max_heartbeat_misses, self.hb_check_period)
+            self.session.send(self.registrar, "unregistration_request", content=dict(id=self.id))
+            self.loop.stop()
+
+        self._hb_last_monitored = time.time()
+            
+        
     def start(self):
         dc = ioloop.DelayedCallback(self.register, 0, self.loop)
         dc.start()
         self._abort_dc = ioloop.DelayedCallback(self.abort, self.timeout*1000, self.loop)
         self._abort_dc.start()
+
 

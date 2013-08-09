@@ -105,7 +105,7 @@ class InputHookManager(object):
     
     def __init__(self):
         if ctypes is None:
-            warn("IPython GUI event loop requires ctypes, %gui will not be available\n")
+            warn("IPython GUI event loop requires ctypes, %gui will not be available")
             return
         self.PYFUNC = ctypes.PYFUNCTYPE(ctypes.c_int)
         self._apps = {}
@@ -176,7 +176,7 @@ class InputHookManager(object):
         """
         if gui is None:
             self._apps = {}
-        elif self._apps.has_key(gui):
+        elif gui in self._apps:
             del self._apps[gui]
 
     def enable_wx(self, app=None):
@@ -225,7 +225,7 @@ class InputHookManager(object):
 
         This merely sets PyOS_InputHook to NULL.
         """
-        if self._apps.has_key(GUI_WX):
+        if GUI_WX in self._apps:
             self._apps[GUI_WX]._in_event_loop = False
         self.clear_inputhook()
 
@@ -265,7 +265,7 @@ class InputHookManager(object):
 
         This merely sets PyOS_InputHook to NULL.
         """
-        if self._apps.has_key(GUI_QT4):
+        if GUI_QT4 in self._apps:
             self._apps[GUI_QT4]._in_event_loop = False
         self.clear_inputhook()
 
@@ -364,7 +364,7 @@ class InputHookManager(object):
                                               glut_close, glut_display, \
                                               glut_idle, inputhook_glut
 
-        if not self._apps.has_key( GUI_GLUT ):
+        if GUI_GLUT not in self._apps:
             glut.glutInit( sys.argv )
             glut.glutInitDisplayMode( glut_display_mode )
             # This is specific to freeglut
@@ -417,7 +417,6 @@ class InputHookManager(object):
         IPython.
 
         """
-        import pyglet
         from IPython.lib.inputhookpyglet import inputhook_pyglet
         self.set_inputhook(inputhook_pyglet)
         self._current_gui = GUI_PYGLET
@@ -500,7 +499,7 @@ def enable_gui(gui=None, app=None):
       For toolkits that have the concept of a global app, you can supply an
       existing one.  If not given, the toolkit will be probed for one, and if
       none is found, a new one will be created.  Note that GTK does not have
-      this concept, and passing an app if `gui`=="GTK" will raise an error.
+      this concept, and passing an app if ``gui=="GTK"`` will raise an error.
 
     Returns
     -------

@@ -13,9 +13,13 @@ from __future__ import absolute_import
 # Imports
 #-----------------------------------------------------------------------------
 
+import functools
 import os
+import random
 import sys
 import tempfile
+import textwrap
+import unittest
 
 import nose.tools as nt
 from nose import SkipTest
@@ -23,6 +27,8 @@ from nose import SkipTest
 from IPython.testing import decorators as dec
 from IPython.testing import tools as tt
 from IPython.utils import py3compat
+from IPython.utils.tempdir import TemporaryDirectory
+from IPython.core import debugger
 
 #-----------------------------------------------------------------------------
 # Test functions begin
@@ -86,6 +92,56 @@ def doctest_run_builtins():
        ....:
     """
 
+
+def doctest_run_option_parser():
+    r"""Test option parser in %run.
+
+    In [1]: %run print_argv.py
+    []
+
+    In [2]: %run print_argv.py print*.py
+    ['print_argv.py']
+
+    In [3]: %run -G print_argv.py print*.py
+    ['print*.py']
+
+    """
+
+
+@dec.skip_win32
+def doctest_run_option_parser_for_posix():
+    r"""Test option parser in %run (Linux/OSX specific).
+
+    You need double quote to escape glob in POSIX systems:
+
+    In [1]: %run print_argv.py print\\*.py
+    ['print*.py']
+
+    You can't use quote to escape glob in POSIX systems:
+
+    In [2]: %run print_argv.py 'print*.py'
+    ['print_argv.py']
+
+    """
+
+
+@dec.skip_if_not_win32
+def doctest_run_option_parser_for_windows():
+    r"""Test option parser in %run (Windows specific).
+
+    In Windows, you can't escape ``*` `by backslash:
+
+    In [1]: %run print_argv.py print\\*.py
+    ['print\\*.py']
+
+    You can use quote to escape glob:
+
+    In [2]: %run print_argv.py 'print*.py'
+    ['print*.py']
+
+    """
+
+
 @py3compat.doctest_refactor_print
 def doctest_reset_del():
     """Test that resetting doesn't cause errors in __del__ methods.
@@ -132,7 +188,7 @@ class TestMagicRunPass(tt.TempFileMixin):
         bid1 = id(_ip.user_ns['__builtins__'])
         self.run_tmpfile()
         bid2 = id(_ip.user_ns['__builtins__'])
-        tt.assert_equals(bid1, bid2)
+        nt.assert_equal(bid1, bid2)
 
     def test_builtins_type(self):
         """Check that the type of __builtins__ doesn't change with %run.
@@ -143,14 +199,14 @@ class TestMagicRunPass(tt.TempFileMixin):
         """
         _ip = get_ipython()
         self.run_tmpfile()
-        tt.assert_equals(type(_ip.user_ns['__builtins__']),type(sys))
+        nt.assert_equal(type(_ip.user_ns['__builtins__']),type(sys))
 
     def test_prompts(self):
         """Test that prompts correctly generate after %run"""
         self.run_tmpfile()
         _ip = get_ipython()
         p2 = _ip.prompt_manager.render('in2').strip()
-        nt.assert_equals(p2[:3], '...')
+        nt.assert_equal(p2[:3], '...')
         
     def test_run_profile( self ):
         """Test that the option -p, which invokes the profiler, do not
@@ -188,7 +244,6 @@ class TestMagicRunSimple(tt.TempFileMixin):
             err = None
         tt.ipexec_validate(self.fname, 'object A deleted', err)
     
-    @dec.skip_known_failure 
     def test_aggressive_namespace_cleanup(self):
         """Test that namespace cleanup is not too aggressive GH-238
 
@@ -197,16 +252,33 @@ class TestMagicRunSimple(tt.TempFileMixin):
         class secondtmp(tt.TempFileMixin): pass
         empty = secondtmp()
         empty.mktmp('')
+        # On Windows, the filename will have \users in it, so we need to use the
+        # repr so that the \u becomes \\u.
         src = ("ip = get_ipython()\n"
                "for i in range(5):\n"
                "   try:\n"
-               "       ip.magic('run %s')\n"
-               "   except NameError, e:\n"
-               "       print i;break\n" % empty.fname)
-        self.mktmp(py3compat.doctest_refactor_print(src))
+               "       ip.magic(%r)\n"
+               "   except NameError as e:\n"
+               "       print(i)\n"
+               "       break\n" % ('run ' + empty.fname))
+        self.mktmp(src)
         _ip.magic('run %s' % self.fname)
         _ip.run_cell('ip == get_ipython()')
-        tt.assert_equals(_ip.user_ns['i'], 5)
+        nt.assert_equal(_ip.user_ns['i'], 4)
+    
+    def test_run_second(self):
+        """Test that running a second file doesn't clobber the first, gh-3547
+        """
+        self.mktmp("avar = 1\n"
+                   "def afunc():\n"
+                   "  return avar\n")
+
+        empty = tt.TempFileMixin()
+        empty.mktmp("")
+        
+        _ip.magic('run %s' % self.fname)
+        _ip.magic('run %s' % empty.fname)
+        nt.assert_equal(_ip.user_ns['afunc'](), 1)
 
     @dec.skip_win32
     def test_tclass(self):
@@ -236,18 +308,50 @@ tclass.py: deleting object: C-third
         self.mktmp(src)
         _ip.run_cell("zz = 23")
         _ip.magic('run -i %s' % self.fname)
-        tt.assert_equals(_ip.user_ns['yy'], 23)
+        nt.assert_equal(_ip.user_ns['yy'], 23)
         _ip.magic('reset -f')
         _ip.run_cell("zz = 23")
         _ip.magic('run -i %s' % self.fname)
-        tt.assert_equals(_ip.user_ns['yy'], 23)
+        nt.assert_equal(_ip.user_ns['yy'], 23)
     
     def test_unicode(self):
         """Check that files in odd encodings are accepted."""
         mydir = os.path.dirname(__file__)
         na = os.path.join(mydir, 'nonascii.py')
         _ip.magic('run "%s"' % na)
-        tt.assert_equals(_ip.user_ns['u'], u'Ўт№Ф')
+        nt.assert_equal(_ip.user_ns['u'], u'Ўт№Ф')
+
+    def test_run_py_file_attribute(self):
+        """Test handling of `__file__` attribute in `%run <file>.py`."""
+        src = "t = __file__\n"
+        self.mktmp(src)
+        _missing = object()
+        file1 = _ip.user_ns.get('__file__', _missing)
+        _ip.magic('run %s' % self.fname)
+        file2 = _ip.user_ns.get('__file__', _missing)
+
+        # Check that __file__ was equal to the filename in the script's
+        # namespace.
+        nt.assert_equal(_ip.user_ns['t'], self.fname)
+
+        # Check that __file__ was not leaked back into user_ns.
+        nt.assert_equal(file1, file2)
+
+    def test_run_ipy_file_attribute(self):
+        """Test handling of `__file__` attribute in `%run <file.ipy>`."""
+        src = "t = __file__\n"
+        self.mktmp(src, ext='.ipy')
+        _missing = object()
+        file1 = _ip.user_ns.get('__file__', _missing)
+        _ip.magic('run %s' % self.fname)
+        file2 = _ip.user_ns.get('__file__', _missing)
+
+        # Check that __file__ was equal to the filename in the script's
+        # namespace.
+        nt.assert_equal(_ip.user_ns['t'], self.fname)
+
+        # Check that __file__ was not leaked back into user_ns.
+        nt.assert_equal(file1, file2)
 
     def test_run_formatting(self):
         """ Test that %run -t -N<N> does not raise a TypeError for N > 1."""
@@ -255,3 +359,74 @@ tclass.py: deleting object: C-third
         self.mktmp(src)
         _ip.magic('run -t -N 1 %s' % self.fname)
         _ip.magic('run -t -N 10 %s' % self.fname)
+
+
+class TestMagicRunWithPackage(unittest.TestCase):
+
+    def writefile(self, name, content):
+        path = os.path.join(self.tempdir.name, name)
+        d = os.path.dirname(path)
+        if not os.path.isdir(d):
+            os.makedirs(d)
+        with open(path, 'w') as f:
+            f.write(textwrap.dedent(content))
+
+    def setUp(self):
+        self.package = package = 'tmp{0}'.format(repr(random.random())[2:])
+        """Temporary valid python package name."""
+
+        self.value = int(random.random() * 10000)
+
+        self.tempdir = TemporaryDirectory()
+        self.__orig_cwd = os.getcwdu()
+        sys.path.insert(0, self.tempdir.name)
+
+        self.writefile(os.path.join(package, '__init__.py'), '')
+        self.writefile(os.path.join(package, 'sub.py'), """
+        x = {0!r}
+        """.format(self.value))
+        self.writefile(os.path.join(package, 'relative.py'), """
+        from .sub import x
+        """)
+        self.writefile(os.path.join(package, 'absolute.py'), """
+        from {0}.sub import x
+        """.format(package))
+
+    def tearDown(self):
+        os.chdir(self.__orig_cwd)
+        sys.path[:] = [p for p in sys.path if p != self.tempdir.name]
+        self.tempdir.cleanup()
+
+    def check_run_submodule(self, submodule, opts=''):
+        _ip.magic('run {2} -m {0}.{1}'.format(self.package, submodule, opts))
+        self.assertEqual(_ip.user_ns['x'], self.value,
+                         'Variable `x` is not loaded from module `{0}`.'
+                         .format(submodule))
+
+    def test_run_submodule_with_absolute_import(self):
+        self.check_run_submodule('absolute')
+
+    def test_run_submodule_with_relative_import(self):
+        """Run submodule that has a relative import statement (#2727)."""
+        self.check_run_submodule('relative')
+
+    def test_prun_submodule_with_absolute_import(self):
+        self.check_run_submodule('absolute', '-p')
+
+    def test_prun_submodule_with_relative_import(self):
+        self.check_run_submodule('relative', '-p')
+
+    def with_fake_debugger(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwds):
+            with tt.monkeypatch(debugger.Pdb, 'run', staticmethod(eval)):
+                return func(*args, **kwds)
+        return wrapper
+
+    @with_fake_debugger
+    def test_debug_run_submodule_with_absolute_import(self):
+        self.check_run_submodule('absolute', '-d')
+
+    @with_fake_debugger
+    def test_debug_run_submodule_with_relative_import(self):
+        self.check_run_submodule('relative', '-d')

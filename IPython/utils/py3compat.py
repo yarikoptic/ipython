@@ -50,6 +50,27 @@ def _modify_str_or_docstring(str_change_func):
         return doc
     return wrapper
 
+def safe_unicode(e):
+    """unicode(e) with various fallbacks. Used for exceptions, which may not be
+    safe to call unicode() on.
+    """
+    try:
+        return unicode(e)
+    except UnicodeError:
+        pass
+
+    try:
+        return py3compat.str_to_unicode(str(e))
+    except UnicodeError:
+        pass
+
+    try:
+        return py3compat.str_to_unicode(repr(e))
+    except UnicodeError:
+        pass
+
+    return u'Unrecoverably corrupt evalue'
+
 if sys.version_info[0] >= 3:
     PY3 = True
     
@@ -62,6 +83,8 @@ if sys.version_info[0] >= 3:
     bytes_to_str = decode
     cast_bytes_py2 = no_code
     
+    string_types = (str,)
+    
     def isidentifier(s, dotted=False):
         if dotted:
             return all(isidentifier(a) for a in s.split("."))
@@ -73,7 +96,8 @@ if sys.version_info[0] >= 3:
     
     def execfile(fname, glob, loc=None):
         loc = loc if (loc is not None) else glob
-        exec compile(open(fname, 'rb').read(), fname, 'exec') in glob, loc
+        with open(fname, 'rb') as f:
+            exec compile(f.read(), fname, 'exec') in glob, loc
     
     # Refactor print statements in doctests.
     _print_statement_re = re.compile(r"\bprint (?P<expr>.*)$", re.MULTILINE)
@@ -108,6 +132,8 @@ else:
     str_to_bytes = no_code
     bytes_to_str = no_code
     cast_bytes_py2 = cast_bytes
+    
+    string_types = (str, unicode)
     
     import re
     _name_re = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*$")

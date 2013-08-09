@@ -67,7 +67,11 @@ from setupbase import (
     find_scripts,
     find_data_files,
     check_for_dependencies,
-    record_commit_info,
+    git_prebuild,
+    check_submodule_status,
+    update_submodules,
+    require_submodules,
+    UpdateSubmodules,
 )
 from setupext import setupext
 
@@ -80,7 +84,7 @@ pjoin = os.path.join
 
 def cleanup():
     """Clean up the junk left around by the build process"""
-    if "develop" not in sys.argv:
+    if "develop" not in sys.argv and "egg_info" not in sys.argv:
         try:
             shutil.rmtree('ipython.egg-info')
         except:
@@ -104,6 +108,43 @@ else:
 if os_name == 'windows' and 'sdist' in sys.argv:
     print('The sdist command is not available under Windows.  Exiting.')
     sys.exit(1)
+
+#-------------------------------------------------------------------------------
+# Make sure we aren't trying to run without submodules
+#-------------------------------------------------------------------------------
+here = os.path.abspath(os.path.dirname(__file__))
+
+def require_clean_submodules():
+    """Check on git submodules before distutils can do anything
+
+    Since distutils cannot be trusted to update the tree
+    after everything has been set in motion,
+    this is not a distutils command.
+    """
+    # PACKAGERS: Add a return here to skip checks for git submodules
+    
+    # don't do anything if nothing is actually supposed to happen
+    for do_nothing in ('-h', '--help', '--help-commands', 'clean', 'submodule'):
+        if do_nothing in sys.argv:
+            return
+
+    status = check_submodule_status(here)
+
+    if status == "missing":
+        print("checking out submodules for the first time")
+        update_submodules(here)
+    elif status == "unclean":
+        print('\n'.join([
+            "Cannot build / install IPython with unclean submodules",
+            "Please update submodules with",
+            "    python setup.py submodule",
+            "or",
+            "    git submodule update",
+            "or commit any submodule changes you have made."
+        ]))
+        sys.exit(1)
+
+require_clean_submodules()
 
 #-------------------------------------------------------------------------------
 # Things related to the IPython documentation
@@ -193,9 +234,10 @@ class UploadWindowsInstallers(upload):
             self.upload_file('bdist_wininst', 'any', dist_file)
 
 setup_args['cmdclass'] = {
-    'build_py': record_commit_info('IPython'),
-    'sdist' : record_commit_info('IPython', sdist),
+    'build_py': git_prebuild('IPython'),
+    'sdist' : git_prebuild('IPython', sdist),
     'upload_wininst' : UploadWindowsInstallers,
+    'submodule' : UpdateSubmodules,
 }
 
 #---------------------------------------------------------------------------
@@ -223,16 +265,29 @@ if len(needs_setuptools.intersection(sys.argv)) > 0:
 setuptools_extra_args = {}
 
 if 'setuptools' in sys.modules:
+    # setup.py develop should check for submodules
+    from setuptools.command.develop import develop
+    setup_args['cmdclass']['develop'] = require_submodules(develop)
+    
     setuptools_extra_args['zip_safe'] = False
     setuptools_extra_args['entry_points'] = find_scripts(True)
     setup_args['extras_require'] = dict(
-        parallel = 'pyzmq>=2.1.4',
-        qtconsole = ['pyzmq>=2.1.4', 'pygments'],
-        zmq = 'pyzmq>=2.1.4',
+        parallel = 'pyzmq>=2.1.11',
+        qtconsole = ['pyzmq>=2.1.11', 'pygments'],
+        zmq = 'pyzmq>=2.1.11',
         doc = 'Sphinx>=0.3',
         test = 'nose>=0.10.1',
-        notebook = ['tornado>=2.0', 'pyzmq>=2.1.11'],
+        notebook = ['tornado>=2.0', 'pyzmq>=2.1.11', 'jinja2'],
+        nbconvert = ['pygments', 'jinja2', 'Sphinx>=0.3']
     )
+    everything = set()
+    for deps in setup_args['extras_require'].values():
+        if not isinstance(deps, list):
+            deps = [deps]
+        for dep in deps:
+            everything.add(dep)
+    setup_args['extras_require']['all'] = everything
+    
     requires = setup_args.setdefault('install_requires', [])
     setupext.display_status = False
     if not setupext.check_for_readline():
@@ -256,15 +311,28 @@ if 'setuptools' in sys.modules:
                ('sdist' in sys.argv or 'bdist_rpm' in sys.argv):
             print >> sys.stderr, "ERROR: bdist_wininst must be run alone. Exiting."
             sys.exit(1)
+        setup_args['data_files'].append(
+            ['Scripts', ('scripts/ipython.ico', 'scripts/ipython_nb.ico')])
         setup_args['scripts'] = [pjoin('scripts','ipython_win_post_install.py')]
         setup_args['options'] = {"bdist_wininst":
                                  {"install_script":
                                   "ipython_win_post_install.py"}}
-    
+
     if PY3:
         setuptools_extra_args['use_2to3'] = True
+        # we try to make a 2.6, 2.7, and 3.1 to 3.3 python compatible code
+        # so we explicitly disable some 2to3 fixes to be sure we aren't forgetting
+        # anything.
+        setuptools_extra_args['use_2to3_exclude_fixers'] = [
+                'lib2to3.fixes.fix_apply',
+                'lib2to3.fixes.fix_except',
+                'lib2to3.fixes.fix_has_key',
+                'lib2to3.fixes.fix_next',
+                'lib2to3.fixes.fix_repr',
+                'lib2to3.fixes.fix_tuple_params',
+                ]
         from setuptools.command.build_py import build_py
-        setup_args['cmdclass'] = {'build_py': record_commit_info('IPython', build_cmd=build_py)}
+        setup_args['cmdclass'] = {'build_py': git_prebuild('IPython', build_cmd=build_py)}
         setuptools_extra_args['entry_points'] = find_scripts(True, suffix='3')
         setuptools._dont_write_bytecode = True
 else:

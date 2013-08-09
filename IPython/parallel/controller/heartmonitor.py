@@ -19,12 +19,12 @@ import time
 import uuid
 
 import zmq
-from zmq.devices import ThreadDevice
+from zmq.devices import ThreadDevice, ThreadMonitoredQueue
 from zmq.eventloop import ioloop, zmqstream
 
 from IPython.config.configurable import LoggingConfigurable
 from IPython.utils.py3compat import str_to_bytes
-from IPython.utils.traitlets import Set, Instance, CFloat, Integer
+from IPython.utils.traitlets import Set, Instance, CFloat, Integer, Dict
 
 from IPython.parallel.util import log_errors
 
@@ -39,8 +39,11 @@ class Heart(object):
     You can specify the DEALER's IDENTITY via the optional heart_id argument."""
     device=None
     id=None
-    def __init__(self, in_addr, out_addr, in_type=zmq.SUB, out_type=zmq.DEALER, heart_id=None):
-        self.device = ThreadDevice(zmq.FORWARDER, in_type, out_type)
+    def __init__(self, in_addr, out_addr, mon_addr=None, in_type=zmq.SUB, out_type=zmq.DEALER, mon_type=zmq.PUB, heart_id=None):
+        if mon_addr is None:
+            self.device = ThreadDevice(zmq.FORWARDER, in_type, out_type)
+        else:
+            self.device = ThreadMonitoredQueue(in_type, out_type, mon_type, in_prefix=b"", out_prefix=b"")
         # do not allow the device to share global Context.instance,
         # which is the default behavior in pyzmq > 2.1.10
         self.device.context_factory = zmq.Context
@@ -48,6 +51,8 @@ class Heart(object):
         self.device.daemon=True
         self.device.connect_in(in_addr)
         self.device.connect_out(out_addr)
+        if mon_addr is not None:
+            self.device.connect_mon(mon_addr)
         if in_type == zmq.SUB:
             self.device.setsockopt_in(zmq.SUBSCRIBE, b"")
         if heart_id is None:
@@ -69,6 +74,9 @@ class HeartMonitor(LoggingConfigurable):
         help='The frequency at which the Hub pings the engines for heartbeats '
         '(in ms)',
     )
+    max_heartmonitor_misses = Integer(10, config=True,
+        help='Allowed consecutive missed pings from controller Hub to engine before unregistering.',
+    )
 
     pingstream=Instance('zmq.eventloop.zmqstream.ZMQStream')
     pongstream=Instance('zmq.eventloop.zmqstream.ZMQStream')
@@ -79,7 +87,7 @@ class HeartMonitor(LoggingConfigurable):
     # not settable:
     hearts=Set()
     responses=Set()
-    on_probation=Set()
+    on_probation=Dict()
     last_ping=CFloat(0)
     _new_handlers = Set()
     _failure_handlers = Set()
@@ -116,17 +124,32 @@ class HeartMonitor(LoggingConfigurable):
         self.log.debug("heartbeat::sending %s", self.lifetime)
         goodhearts = self.hearts.intersection(self.responses)
         missed_beats = self.hearts.difference(goodhearts)
-        heartfailures = self.on_probation.intersection(missed_beats)
         newhearts = self.responses.difference(goodhearts)
         map(self.handle_new_heart, newhearts)
+        heartfailures, on_probation = self._check_missed(missed_beats, self.on_probation,
+                                                         self.hearts)
         map(self.handle_heart_failure, heartfailures)
-        self.on_probation = missed_beats.intersection(self.hearts)
+        self.on_probation = on_probation
         self.responses = set()
-        # print self.on_probation, self.hearts
+        #print self.on_probation, self.hearts
         # self.log.debug("heartbeat::beat %.3f, %i beating hearts", self.lifetime, len(self.hearts))
         self.pingstream.send(str_to_bytes(str(self.lifetime)))
         # flush stream to force immediate socket send
         self.pingstream.flush()
+
+    def _check_missed(self, missed_beats, on_probation, hearts):
+        """Update heartbeats on probation, identifying any that have too many misses.
+        """
+        failures = []
+        new_probation = {}
+        for cur_heart in (b for b in missed_beats if b in hearts):
+            miss_count = on_probation.get(cur_heart, 0) + 1
+            self.log.info("heartbeat::missed %s : %s" % (cur_heart, miss_count))
+            if miss_count > self.max_heartmonitor_misses:
+                failures.append(cur_heart)
+            else:
+                new_probation[cur_heart] = miss_count
+        return failures, new_probation
 
     def handle_new_heart(self, heart):
         if self._new_handlers:
@@ -165,18 +188,3 @@ class HeartMonitor(LoggingConfigurable):
         else:
             self.log.warn("heartbeat::got bad heartbeat (possibly old?): %s (current=%.3f)", msg[1], self.lifetime)
 
-
-if __name__ == '__main__':
-    loop = ioloop.IOLoop.instance()
-    context = zmq.Context()
-    pub = context.socket(zmq.PUB)
-    pub.bind('tcp://127.0.0.1:5555')
-    router = context.socket(zmq.ROUTER)
-    router.bind('tcp://127.0.0.1:5556')
-
-    outstream = zmqstream.ZMQStream(pub, loop)
-    instream = zmqstream.ZMQStream(router, loop)
-
-    hb = HeartMonitor(loop, outstream, instream)
-
-    loop.start()

@@ -25,18 +25,17 @@ rid of that dependency, we could move it there.
 #-----------------------------------------------------------------------------
 # Imports
 #-----------------------------------------------------------------------------
+from __future__ import print_function
 
 import os
 import re
-import subprocess
 import sys
 import tempfile
 
 from io import UnsupportedOperation
 
-from IPython.core import ipapi
+from IPython import get_ipython
 from IPython.core.error import TryNext
-from IPython.utils.cursesimport import use_curses
 from IPython.utils.data import chop
 from IPython.utils import io
 from IPython.utils.process import system
@@ -59,74 +58,79 @@ def page_dumb(strng, start=0, screen_lines=25):
     out_ln  = strng.splitlines()[start:]
     screens = chop(out_ln,screen_lines-1)
     if len(screens) == 1:
-        print >>io.stdout, os.linesep.join(screens[0])
+        print(os.linesep.join(screens[0]), file=io.stdout)
     else:
         last_escape = ""
         for scr in screens[0:-1]:
             hunk = os.linesep.join(scr)
-            print >>io.stdout, last_escape + hunk
+            print(last_escape + hunk, file=io.stdout)
             if not page_more():
                 return
             esc_list = esc_re.findall(hunk)
             if len(esc_list) > 0:
                 last_escape = esc_list[-1]
-        print >>io.stdout, last_escape + os.linesep.join(screens[-1])
+        print(last_escape + os.linesep.join(screens[-1]), file=io.stdout)
 
-def _detect_screen_size(use_curses, screen_lines_def):
+def _detect_screen_size(screen_lines_def):
     """Attempt to work out the number of lines on the screen.
 
     This is called by page(). It can raise an error (e.g. when run in the
     test suite), so it's separated out so it can easily be called in a try block.
     """
     TERM = os.environ.get('TERM',None)
-    if (TERM=='xterm' or TERM=='xterm-color') and sys.platform != 'sunos5':
-        local_use_curses = use_curses
-    else:
+    if not((TERM=='xterm' or TERM=='xterm-color') and sys.platform != 'sunos5'):
         # curses causes problems on many terminals other than xterm, and
         # some termios calls lock up on Sun OS5.
-        local_use_curses = False
-    if local_use_curses:
+        return screen_lines_def
+    
+    try:
         import termios
         import curses
-        # There is a bug in curses, where *sometimes* it fails to properly
-        # initialize, and then after the endwin() call is made, the
-        # terminal is left in an unusable state.  Rather than trying to
-        # check everytime for this (by requesting and comparing termios
-        # flags each time), we just save the initial terminal state and
-        # unconditionally reset it every time.  It's cheaper than making
-        # the checks.
-        term_flags = termios.tcgetattr(sys.stdout)
-
-        # Curses modifies the stdout buffer size by default, which messes
-        # up Python's normal stdout buffering.  This would manifest itself
-        # to IPython users as delayed printing on stdout after having used
-        # the pager.
-        #
-        # We can prevent this by manually setting the NCURSES_NO_SETBUF
-        # environment variable.  For more details, see:
-        # http://bugs.python.org/issue10144
-        NCURSES_NO_SETBUF = os.environ.get('NCURSES_NO_SETBUF', None)
-        os.environ['NCURSES_NO_SETBUF'] = ''
-
-        # Proceed with curses initialization
-        scr = curses.initscr()
-        screen_lines_real,screen_cols = scr.getmaxyx()
-        curses.endwin()
-
-        # Restore environment
-        if NCURSES_NO_SETBUF is None:
-            del os.environ['NCURSES_NO_SETBUF']
-        else:
-            os.environ['NCURSES_NO_SETBUF'] = NCURSES_NO_SETBUF
-
-        # Restore terminal state in case endwin() didn't.
-        termios.tcsetattr(sys.stdout,termios.TCSANOW,term_flags)
-        # Now we have what we needed: the screen size in rows/columns
-        return screen_lines_real
-        #print '***Screen size:',screen_lines_real,'lines x',\
-        #screen_cols,'columns.' # dbg
-    else:
+    except ImportError:
         return screen_lines_def
+    
+    # There is a bug in curses, where *sometimes* it fails to properly
+    # initialize, and then after the endwin() call is made, the
+    # terminal is left in an unusable state.  Rather than trying to
+    # check everytime for this (by requesting and comparing termios
+    # flags each time), we just save the initial terminal state and
+    # unconditionally reset it every time.  It's cheaper than making
+    # the checks.
+    term_flags = termios.tcgetattr(sys.stdout)
+
+    # Curses modifies the stdout buffer size by default, which messes
+    # up Python's normal stdout buffering.  This would manifest itself
+    # to IPython users as delayed printing on stdout after having used
+    # the pager.
+    #
+    # We can prevent this by manually setting the NCURSES_NO_SETBUF
+    # environment variable.  For more details, see:
+    # http://bugs.python.org/issue10144
+    NCURSES_NO_SETBUF = os.environ.get('NCURSES_NO_SETBUF', None)
+    os.environ['NCURSES_NO_SETBUF'] = ''
+
+    # Proceed with curses initialization
+    try:
+        scr = curses.initscr()
+    except AttributeError:
+        # Curses on Solaris may not be complete, so we can't use it there
+        return screen_lines_def
+    
+    screen_lines_real,screen_cols = scr.getmaxyx()
+    curses.endwin()
+
+    # Restore environment
+    if NCURSES_NO_SETBUF is None:
+        del os.environ['NCURSES_NO_SETBUF']
+    else:
+        os.environ['NCURSES_NO_SETBUF'] = NCURSES_NO_SETBUF
+
+    # Restore terminal state in case endwin() didn't.
+    termios.tcsetattr(sys.stdout,termios.TCSANOW,term_flags)
+    # Now we have what we needed: the screen size in rows/columns
+    return screen_lines_real
+    #print '***Screen size:',screen_lines_real,'lines x',\
+    #screen_cols,'columns.' # dbg
 
 def page(strng, start=0, screen_lines=0, pager_cmd=None):
     """Print a string, piping through a pager after a certain length.
@@ -154,7 +158,7 @@ def page(strng, start=0, screen_lines=0, pager_cmd=None):
     start = max(0, start)
 
     # first, try the hook
-    ip = ipapi.get()
+    ip = get_ipython()
     if ip:
         try:
             ip.hooks.show_in_pager(strng)
@@ -165,7 +169,7 @@ def page(strng, start=0, screen_lines=0, pager_cmd=None):
     # Ugly kludge, but calling curses.initscr() flat out crashes in emacs
     TERM = os.environ.get('TERM','dumb')
     if TERM in ['dumb','emacs'] and os.name != 'nt':
-        print strng
+        print(strng)
         return
     # chop off the topmost part of the string we don't want to see
     str_lines = strng.splitlines()[start:]
@@ -183,15 +187,15 @@ def page(strng, start=0, screen_lines=0, pager_cmd=None):
     # auto-determine screen size
     if screen_lines <= 0:
         try:
-            screen_lines += _detect_screen_size(use_curses, screen_lines_def)
+            screen_lines += _detect_screen_size(screen_lines_def)
         except (TypeError, UnsupportedOperation):
-            print >>io.stdout, str_toprint
+            print(str_toprint, file=io.stdout)
             return
 
     #print 'numlines',numlines,'screenlines',screen_lines  # dbg
     if numlines <= screen_lines :
         #print '*** normal print'  # dbg
-        print >>io.stdout, str_toprint
+        print(str_toprint, file=io.stdout)
     else:
         # Try to open pager and default to internal one if that fails.
         # All failure modes are tagged as 'retval=1', to match the return
@@ -226,7 +230,7 @@ def page(strng, start=0, screen_lines=0, pager_cmd=None):
                         strng, encoding=pager_encoding))
                 finally:
                     retval = pager.close()
-            except IOError,msg:  # broken pipe when user quits
+            except IOError as msg:  # broken pipe when user quits
                 if msg.args == (32, 'Broken pipe'):
                     retval = None
                 else:
@@ -255,7 +259,7 @@ def page_file(fname, start=0, pager_cmd=None):
                 start -= 1
             page(open(fname).read(),start)
         except:
-            print 'Unable to show file',`fname`
+            print('Unable to show file',repr(fname))
 
 
 def get_pager_cmd(pager_cmd=None):
@@ -330,13 +334,13 @@ def snip_print(str,width = 75,print_full = 0,header = ''):
         page(header+str)
         return 0
 
-    print header,
+    print(header, end=' ')
     if len(str) < width:
-        print str
+        print(str)
         snip = 0
     else:
         whalf = int((width -5)/2)
-        print str[:whalf] + ' <...> ' + str[-whalf:]
+        print(str[:whalf] + ' <...> ' + str[-whalf:])
         snip = 1
     if snip and print_full == 2:
         if raw_input(header+' Snipped. View (y/n)? [N]').lower() == 'y':

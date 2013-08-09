@@ -1,10 +1,5 @@
 """Generic testing tools.
 
-In particular, this module exposes a set of top-level assert* functions that
-can be used in place of nose.tools.assert* in method generators (the ones in
-nose can not, at least as of nose 0.10.4).
-
-
 Authors
 -------
 - Fernando Perez <Fernando.Perez@berkeley.edu>
@@ -30,6 +25,7 @@ import tempfile
 
 from contextlib import contextmanager
 from io import StringIO
+from subprocess import Popen, PIPE
 
 try:
     # These tools are used by parts of the runtime, so we make the nose
@@ -41,7 +37,6 @@ except ImportError:
     has_nose = False
 
 from IPython.config.loader import Config
-from IPython.utils.process import find_cmd, getoutputerror
 from IPython.utils.text import list_strings
 from IPython.utils.io import temp_pyfile, Tee
 from IPython.utils import py3compat
@@ -49,22 +44,6 @@ from IPython.utils.encoding import DEFAULT_ENCODING
 
 from . import decorators as dec
 from . import skipdoctest
-
-#-----------------------------------------------------------------------------
-# Globals
-#-----------------------------------------------------------------------------
-
-# Make a bunch of nose.tools assert wrappers that can be used in test
-# generators.  This will expose an assert* function for each one in nose.tools.
-
-_tpl = """
-def %(name)s(*a,**kw):
-    return nt.%(name)s(*a,**kw)
-"""
-
-if has_nose:
-    for _x in [a for a in dir(nt) if a.startswith('assert')]:
-        exec _tpl % dict(name=_x)
 
 #-----------------------------------------------------------------------------
 # Functions and classes
@@ -118,6 +97,7 @@ def parse_test_output(txt):
     txt : str
       Text output of a test run, assumed to contain a line of one of the
       following forms::
+      
         'FAILED (errors=1)'
         'FAILED (failures=1)'
         'FAILED (errors=1, failures=1)'
@@ -174,10 +154,32 @@ def default_config():
     return config
 
 
+def get_ipython_cmd(as_string=False):
+    """
+    Return appropriate IPython command line name. By default, this will return
+    a list that can be used with subprocess.Popen, for example, but passing
+    `as_string=True` allows for returning the IPython command as a string.
+
+    Parameters
+    ----------
+    as_string: bool
+        Flag to allow to return the command as a string.
+    """
+    # FIXME: remove workaround for 2.6 support
+    if sys.version_info[:2] > (2,6):
+        ipython_cmd = [sys.executable, "-m", "IPython"]
+    else:
+        ipython_cmd = ["ipython"]
+
+    if as_string:
+        ipython_cmd = " ".join(ipython_cmd)
+
+    return ipython_cmd
+
 def ipexec(fname, options=None):
     """Utility to call 'ipython filename'.
 
-    Starts IPython witha minimal and safe configuration to make startup as fast
+    Starts IPython with a minimal and safe configuration to make startup as fast
     as possible.
 
     Note that this starts IPython in a subprocess!
@@ -202,17 +204,17 @@ def ipexec(fname, options=None):
                     '--PromptManager.in2_template=""',
                     '--PromptManager.out_template=""'
     ]
-    cmdargs = ' '.join(default_argv() + prompt_opts + options)
+    cmdargs = default_argv() + prompt_opts + options
 
-    _ip = get_ipython()
     test_dir = os.path.dirname(__file__)
 
-    ipython_cmd = find_cmd('ipython3' if py3compat.PY3 else 'ipython')
+    ipython_cmd = get_ipython_cmd()
     # Absolute path for filename
     full_fname = os.path.join(test_dir, fname)
-    full_cmd = '%s %s %s' % (ipython_cmd, cmdargs, full_fname)
-    #print >> sys.stderr, 'FULL CMD:', full_cmd # dbg
-    out, err = getoutputerror(full_cmd)
+    full_cmd = ipython_cmd + cmdargs + [full_fname]
+    p = Popen(full_cmd, stdout=PIPE, stderr=PIPE)
+    out, err = p.communicate()
+    out, err = py3compat.bytes_to_str(out), py3compat.bytes_to_str(err)
     # `import readline` causes 'ESC[?1034h' to be output sometimes,
     # so strip that out before doing comparisons
     if out:
@@ -256,12 +258,12 @@ def ipexec_validate(fname, expected_out, expected_err='',
     # more informative than simply having an empty stdout.
     if err:
         if expected_err:
-            nt.assert_equals(err.strip(), expected_err.strip())
+            nt.assert_equal("\n".join(err.strip().splitlines()), "\n".join(expected_err.strip().splitlines()))
         else:
             raise ValueError('Running file %r produced error: %r' %
                              (fname, err))
     # If no errors or output on stderr was expected, match stdout
-    nt.assert_equals(out.strip(), expected_out.strip())
+    nt.assert_equal("\n".join(out.strip().splitlines()), "\n".join(expected_out.strip().splitlines()))
 
 
 class TempFileMixin(object):
@@ -327,7 +329,10 @@ else:
             super(MyStringIO, self).write(s)
 
 notprinted_msg = """Did not find {0!r} in printed output (on {1}):
-{2!r}"""
+-------
+{2!s}
+-------
+"""
 
 class AssertPrints(object):
     """Context manager for testing that code prints certain text.
@@ -358,7 +363,13 @@ class AssertPrints(object):
         printed = self.buffer.getvalue()
         assert self.s in printed, notprinted_msg.format(self.s, self.channel, printed)
         return False
-    
+
+printed_msg = """Found {0!r} in printed output (on {1}):
+-------
+{2!s}
+-------
+"""
+
 class AssertNotPrints(AssertPrints):
     """Context manager for checking that certain output *isn't* produced.
     
@@ -367,7 +378,7 @@ class AssertNotPrints(AssertPrints):
         self.tee.flush()
         setattr(sys, self.channel, self.orig_stream)
         printed = self.buffer.getvalue()
-        assert self.s not in printed, notprinted_msg.format(self.s, self.channel, printed)
+        assert self.s not in printed, printed_msg.format(self.s, self.channel, printed)
         return False
 
 @contextmanager
@@ -390,3 +401,14 @@ def make_tempfile(name):
         yield
     finally:
         os.unlink(name)
+
+
+@contextmanager
+def monkeypatch(obj, name, attr):
+    """
+    Context manager to replace attribute named `name` in `obj` with `attr`.
+    """
+    orig = getattr(obj, name)
+    setattr(obj, name, attr)
+    yield
+    setattr(obj, name, orig)

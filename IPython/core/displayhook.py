@@ -21,12 +21,16 @@ Authors:
 #-----------------------------------------------------------------------------
 # Imports
 #-----------------------------------------------------------------------------
+from __future__ import print_function
 
 import __builtin__
 
+import sys
+
+
 from IPython.config.configurable import Configurable
 from IPython.utils import io
-from IPython.utils.traitlets import Instance, List
+from IPython.utils.traitlets import Instance
 from IPython.utils.warn import warn
 
 #-----------------------------------------------------------------------------
@@ -46,8 +50,8 @@ class DisplayHook(Configurable):
 
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
 
-    def __init__(self, shell=None, cache_size=1000, config=None):
-        super(DisplayHook, self).__init__(shell=shell, config=config)
+    def __init__(self, shell=None, cache_size=1000, **kwargs):
+        super(DisplayHook, self).__init__(shell=shell, **kwargs)
 
         cache_size_min = 3
         if cache_size <= 0:
@@ -141,15 +145,18 @@ class DisplayHook(Configurable):
 
         Returns
         -------
-        format_data : dict
-            A :class:`dict` whose keys are valid MIME types and values are
+        (format_dict, md_dict) : dict
+            format_dict is a :class:`dict` whose keys are valid MIME types and values are
             JSON'able raw data for that MIME type. It is recommended that
             all return values of this should always include the "text/plain"
             MIME type representation of the object.
+            md_dict is a :class:`dict` with the same MIME type keys
+            of metadata associated with each output.
+            
         """
         return self.shell.display_formatter.format(result)
 
-    def write_format_data(self, format_dict):
+    def write_format_data(self, format_dict, md_dict=None):
         """Write the format data dict to the frontend.
 
         This default version of this method simply writes the plain text
@@ -161,6 +168,8 @@ class DisplayHook(Configurable):
         ----------
         format_dict : dict
             The format dict for the object passed to `sys.displayhook`.
+        md_dict : dict (optional)
+            The metadata dict to be associated with the display data.
         """
         # We want to print because we want to always make sure we have a
         # newline, even if all the prompt separators are ''. This is the
@@ -179,7 +188,7 @@ class DisplayHook(Configurable):
                 # But avoid extraneous empty lines.
                 result_repr = '\n' + result_repr
 
-        print >>io.stdout, result_repr
+        print(result_repr, file=io.stdout)
 
     def update_user_ns(self, result):
         """Update user_ns with various things like _, __, _1, etc."""
@@ -188,7 +197,7 @@ class DisplayHook(Configurable):
         if result is not self.shell.user_ns['_oh']:
             if len(self.shell.user_ns['_oh']) >= self.cache_size and self.do_full_cache:
                 warn('Output cache limit (currently '+
-                      `self.cache_size`+' entries) hit.\n'
+                      repr(self.cache_size)+' entries) hit.\n'
                      'Flushing cache and resetting history counter...\n'
                      'The only history variables available will be _,__,___ and _1\n'
                      'with the current result.')
@@ -208,7 +217,7 @@ class DisplayHook(Configurable):
             # hackish access to top-level  namespace to create _1,_2... dynamically
             to_main = {}
             if self.do_full_cache:
-                new_result = '_'+`self.prompt_count`
+                new_result = '_'+repr(self.prompt_count)
                 to_main[new_result] = result
                 self.shell.push(to_main, interactive=False)
                 self.shell.user_ns['_oh'][self.prompt_count] = result
@@ -235,20 +244,20 @@ class DisplayHook(Configurable):
         if result is not None and not self.quiet():
             self.start_displayhook()
             self.write_output_prompt()
-            format_dict = self.compute_format_data(result)
-            self.write_format_data(format_dict)
+            format_dict, md_dict = self.compute_format_data(result)
+            self.write_format_data(format_dict, md_dict)
             self.update_user_ns(result)
             self.log_output(format_dict)
             self.finish_displayhook()
 
     def flush(self):
         if not self.do_full_cache:
-            raise ValueError,"You shouldn't have reached the cache flush "\
-                  "if full caching is not enabled!"
+            raise ValueError("You shouldn't have reached the cache flush "
+                             "if full caching is not enabled!")
         # delete auto-generated vars from global namespace
 
         for n in range(1,self.prompt_count + 1):
-            key = '_'+`n`
+            key = '_'+repr(n)
             try:
                 del self.shell.user_ns[key]
             except: pass
@@ -265,5 +274,7 @@ class DisplayHook(Configurable):
             self.shell.user_ns.update({'_':None,'__':None, '___':None})
         import gc
         # TODO: Is this really needed?
-        gc.collect()
+        # IronPython blocks here forever
+        if sys.platform != "cli":
+            gc.collect()
 
