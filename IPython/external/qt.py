@@ -7,7 +7,7 @@ Do not use this if you need PyQt with the old QString/QVariant API.
 """
 
 import os
-
+from IPython.utils.version import check_version
 # Available APIs.
 QT_API_PYQT = 'pyqt'
 QT_API_PYSIDE = 'pyside'
@@ -23,11 +23,20 @@ def prepare_pyqt4():
 # Select Qt binding, using the QT_API environment variable if available.
 QT_API = os.environ.get('QT_API')
 if QT_API is None:
+    pyside_found = False
     try:
         import PySide
-        if PySide.__version__ < '1.0.3':
+        if not check_version(PySide.__version__, '1.0.3'):
             # old PySide, fallback on PyQt
             raise ImportError
+        # we can't import an incomplete pyside and pyqt4
+        # this will cause a crash in sip (#1431)
+        # check for complete presence before importing
+        import imp
+        imp.find_module("QtCore", PySide.__path__)
+        imp.find_module("QtGui", PySide.__path__)
+        imp.find_module("QtSvg", PySide.__path__)
+        pyside_found = True
         from PySide import QtCore, QtGui, QtSvg
         QT_API = QT_API_PYSIDE
     except ImportError:
@@ -35,7 +44,12 @@ if QT_API is None:
             prepare_pyqt4()
             import PyQt4
             from PyQt4 import QtCore, QtGui, QtSvg
-            if QtCore.PYQT_VERSION_STR < '4.7':
+            if pyside_found:
+                print "WARNING: PySide installation incomplete and PyQt4 " \
+                      "present.\nThis will likely crash, please install " \
+                      "PySide completely, remove PySide or PyQt4 or set " \
+                      "the QT_API environment variable to pyqt or pyside"
+            if not check_version(QtCore.PYQT_VERSION_STR, '4.7'):
                 # PyQt 4.6 has issues with null strings returning as None
                 raise ImportError
             QT_API = QT_API_PYQT
@@ -49,7 +63,7 @@ elif QT_API == QT_API_PYQT:
 # Now peform the imports.
 if QT_API == QT_API_PYQT:
     from PyQt4 import QtCore, QtGui, QtSvg
-    if QtCore.PYQT_VERSION_STR < '4.7':
+    if not check_version(QtCore.PYQT_VERSION_STR, '4.7'):
         raise ImportError("IPython requires PyQt4 >= 4.7, found %s"%QtCore.PYQT_VERSION_STR)
 
     # Alias PyQt-specific functions for PySide compatibility.
@@ -58,7 +72,7 @@ if QT_API == QT_API_PYQT:
 
 elif QT_API == QT_API_PYSIDE:
     import PySide
-    if PySide.__version__ < '1.0.3':
+    if not check_version(PySide.__version__, '1.0.3'):
         raise ImportError("IPython requires PySide >= 1.0.3, found %s"%PySide.__version__)
     from PySide import QtCore, QtGui, QtSvg
 

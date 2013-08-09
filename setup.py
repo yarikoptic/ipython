@@ -93,13 +93,10 @@ def cleanup():
 # Handle OS specific things
 #-------------------------------------------------------------------------------
 
-if os.name == 'posix':
-    os_name = 'posix'
-elif os.name in ['nt','dos']:
+if os.name in ('nt','dos'):
     os_name = 'windows'
 else:
-    print('Unsupported operating system:',os.name)
-    sys.exit(1)
+    os_name = os.name
 
 # Under Windows, 'sdist' has not been supported.  Now that the docs build with
 # Sphinx it might work, but let's not turn it on until someone confirms that it
@@ -230,11 +227,11 @@ if 'setuptools' in sys.modules:
     setuptools_extra_args['entry_points'] = find_scripts(True)
     setup_args['extras_require'] = dict(
         parallel = 'pyzmq>=2.1.4',
-        qtconsole = 'pygments',
+        qtconsole = ['pyzmq>=2.1.4', 'pygments'],
         zmq = 'pyzmq>=2.1.4',
         doc = 'Sphinx>=0.3',
         test = 'nose>=0.10.1',
-        notebook = 'tornado>=2.0'
+        notebook = ['tornado>=2.0', 'pyzmq>=2.1.11'],
     )
     requires = setup_args.setdefault('install_requires', [])
     setupext.display_status = False
