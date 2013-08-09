@@ -59,6 +59,11 @@ ColorSchemeTable class. Currently the following exist:
 You can implement other color schemes easily, the syntax is fairly
 self-explanatory. Please send back new schemes you develop to the author for
 possible inclusion in future releases.
+
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.core.ultratb
+   :parts: 3
 """
 
 #*****************************************************************************
@@ -69,7 +74,7 @@ possible inclusion in future releases.
 #  the file COPYING, distributed as part of this software.
 #*****************************************************************************
 
-from __future__ import with_statement
+from __future__ import unicode_literals
 
 import inspect
 import keyword
@@ -94,13 +99,16 @@ from inspect import getsourcefile, getfile, getmodule,\
 
 # IPython's own modules
 # Modified pdb which doesn't damage IPython's readline handling
-from IPython.core import debugger, ipapi
+from IPython import get_ipython
+from IPython.core import debugger
 from IPython.core.display_trap import DisplayTrap
 from IPython.core.excolors import exception_colors
 from IPython.utils import PyColorize
 from IPython.utils import io
+from IPython.utils import openpy
+from IPython.utils import path as util_path
 from IPython.utils import py3compat
-from IPython.utils import pyfile
+from IPython.utils import ulinecache
 from IPython.utils.data import uniq_stable
 from IPython.utils.warn import info, error
 
@@ -126,15 +134,10 @@ def inspect_error():
     error('Internal Python error in the inspect module.\n'
           'Below is the traceback from this internal error.\n')
 
-
-# N.B. This function is a monkeypatch we are currently not applying.
-# It was written some time ago, to fix an apparent Python bug with
-# codeobj.co_firstlineno . Unfortunately, we don't know under what conditions
-# the bug occurred, so we can't tell if it has been fixed. If it reappears, we
-# will apply the monkeypatch again. Also, note that findsource() is not called
-# by our code at this time - we don't know if it was when the monkeypatch was
-# written, or if the monkeypatch is needed for some other code (like a debugger).
-# For the discussion about not applying it, see gh-1229. TK, Jan 2011.
+# This function is a monkeypatch we apply to the Python inspect module. We have
+# now found when it's needed (see discussion on issue gh-1456), and we have a
+# test case (IPython.core.tests.test_ultratb.ChangedPyFileTest) that fails if
+# the monkeypatch is not applied. TK, Aug 2012.
 def findsource(object):
     """Return the entire source file and starting line number for an object.
 
@@ -210,10 +213,8 @@ def findsource(object):
         return lines, lnum
     raise IOError('could not find code object')
 
-# Not applying the monkeypatch - see above the function for details. TK, Jan 2012
-# Monkeypatch inspect to apply our bugfix.  This code only works with py25
-#if sys.version_info[:2] >= (2,5):
-#    inspect.findsource = findsource
+# Monkeypatch inspect to apply our bugfix.  This code only works with Python >= 2.5
+inspect.findsource = findsource
 
 def fix_frame_records_filenames(records):
     """Try to fix the filenames in each record from inspect.getinnerframes().
@@ -236,7 +237,6 @@ def fix_frame_records_filenames(records):
 
 
 def _fixed_getinnerframes(etb, context=1,tb_offset=0):
-    import linecache
     LNUM_POS, LINES_POS, INDEX_POS =  2, 4, 5
 
     records  = fix_frame_records_filenames(inspect.getinnerframes(etb, context))
@@ -258,7 +258,7 @@ def _fixed_getinnerframes(etb, context=1,tb_offset=0):
         maybeStart = lnum-1 - context//2
         start =  max(maybeStart, 0)
         end   = start + context
-        lines = linecache.getlines(file)[start:end]
+        lines = ulinecache.getlines(file)[start:end]
         buf = list(records[i])
         buf[LNUM_POS] = lnum
         buf[INDEX_POS] = lnum - 1 - start
@@ -280,7 +280,7 @@ def _format_traceback_lines(lnum, index, lines, Colors, lvals=None,scheme=None):
 
     # This lets us get fully syntax-highlighted tracebacks.
     if scheme is None:
-        ipinst = ipapi.get()
+        ipinst = get_ipython()
         if ipinst is not None:
             scheme = ipinst.colors
         else:
@@ -289,12 +289,7 @@ def _format_traceback_lines(lnum, index, lines, Colors, lvals=None,scheme=None):
     _line_format = _parser.format2
 
     for line in lines:
-        # FIXME: we need to ensure the source is a pure string at this point,
-        # else the coloring code makes a  royal mess.  This is in need of a
-        # serious refactoring, so that all of the ultratb and PyColorize code
-        # is unicode-safe.  So for now this is rather an ugly hack, but
-        # necessary to at least have readable tracebacks. Improvements welcome!
-        line = py3compat.cast_bytes_py2(line, 'utf-8')
+        line = py3compat.cast_unicode(line)
 
         new_line, err = _line_format(line, 'str', scheme)
         if not err: line = new_line
@@ -425,9 +420,9 @@ class TBTools(object):
 class ListTB(TBTools):
     """Print traceback information from a traceback list, with optional color.
 
-    Calling: requires 3 arguments:
-      (etype, evalue, elist)
-    as would be obtained by:
+    Calling requires 3 arguments: (etype, evalue, elist)
+    as would be obtained by::
+    
       etype, evalue, tb = sys.exc_info()
       if tb:
         elist = traceback.extract_tb(tb)
@@ -554,14 +549,13 @@ class ListTB(TBTools):
 
         Also lifted nearly verbatim from traceback.py
         """
-
         have_filedata = False
         Colors = self.Colors
         list = []
         stype = Colors.excName + etype.__name__ + Colors.Normal
         if value is None:
             # Not sure if this can still happen in Python 2.6 and above
-            list.append( str(stype) + '\n')
+            list.append( py3compat.cast_unicode(stype) + '\n')
         else:
             if issubclass(etype, SyntaxError):
                 have_filedata = True
@@ -569,22 +563,27 @@ class ListTB(TBTools):
                 if not value.filename: value.filename = "<string>"
                 if value.lineno:
                     lineno = value.lineno
+                    textline = ulinecache.getline(value.filename, value.lineno)
                 else:
                     lineno = 'unknown'
+                    textline = ''
                 list.append('%s  File %s"%s"%s, line %s%s%s\n' % \
                         (Colors.normalEm,
-                         Colors.filenameEm, value.filename, Colors.normalEm,
+                         Colors.filenameEm, py3compat.cast_unicode(value.filename), Colors.normalEm,
                          Colors.linenoEm, lineno, Colors.Normal  ))
-                if value.text is not None:
+                if textline == '':
+                    textline = py3compat.cast_unicode(value.text, "utf-8")
+
+                if textline is not None:
                     i = 0
-                    while i < len(value.text) and value.text[i].isspace():
+                    while i < len(textline) and textline[i].isspace():
                         i += 1
                     list.append('%s    %s%s\n' % (Colors.line,
-                                                  value.text.strip(),
+                                                  textline.strip(),
                                                   Colors.Normal))
                     if value.offset is not None:
                         s = '    '
-                        for c in value.text[i:value.offset-1]:
+                        for c in textline[i:value.offset-1]:
                             if c.isspace():
                                 s += c
                             else:
@@ -604,7 +603,7 @@ class ListTB(TBTools):
 
         # sync with user hooks
         if have_filedata:
-            ipinst = ipapi.get()
+            ipinst = get_ipython()
             if ipinst is not None:
                 ipinst.hooks.synchronize_with_editor(value.filename, value.lineno, 0)
 
@@ -790,10 +789,9 @@ class VerboseTB(TBTools):
         abspath = os.path.abspath
         for frame, file, lnum, func, lines, index in records:
             #print '*** record:',file,lnum,func,lines,index  # dbg
-
             if not file:
                 file = '?'
-            elif not(file.startswith("<") and file.endswith(">")):
+            elif not(file.startswith(str("<")) and file.endswith(str(">"))):
                 # Guess that filenames like <string> aren't real filenames, so
                 # don't call abspath on them.                    
                 try:
@@ -802,7 +800,7 @@ class VerboseTB(TBTools):
                     # Not sure if this can still happen: abspath now works with
                     # file names like <string>
                     pass
-
+            file = py3compat.cast_unicode(file, util_path.fs_encoding)
             link = tpl_link % file
             args, varargs, varkw, locals = inspect.getargvalues(frame)
 
@@ -840,9 +838,9 @@ class VerboseTB(TBTools):
                 continue
             elif file.endswith(('.pyc','.pyo')):
                 # Look up the corresponding source file.
-                file = pyfile.source_from_cache(file)
+                file = openpy.source_from_cache(file)
 
-            def linereader(file=file, lnum=[lnum], getline=linecache.getline):
+            def linereader(file=file, lnum=[lnum], getline=ulinecache.getline):
                 line = getline(file, lnum[0])
                 lnum[0] += 1
                 return line
@@ -879,7 +877,7 @@ class VerboseTB(TBTools):
             except (IndexError, UnicodeDecodeError):
                 # signals exit of tokenizer
                 pass
-            except tokenize.TokenError,msg:
+            except tokenize.TokenError as msg:
                 _m = ("An unexpected error occurred while tokenizing input\n"
                       "The following traceback may be corrupted or invalid\n"
                       "The error message is: %s\n" % msg)
@@ -896,7 +894,7 @@ class VerboseTB(TBTools):
                 for name_full in unique_names:
                     name_base = name_full.split('.',1)[0]
                     if name_base in frame.f_code.co_varnames:
-                        if locals.has_key(name_base):
+                        if name_base in locals:
                             try:
                                 value = repr(eval(name_full,locals))
                             except:
@@ -905,7 +903,7 @@ class VerboseTB(TBTools):
                             value = undefined
                         name = tpl_local_var % name_full
                     else:
-                        if frame.f_globals.has_key(name_base):
+                        if name_base in frame.f_globals:
                             try:
                                 value = repr(eval(name_full,frame.f_globals))
                             except:
@@ -937,7 +935,7 @@ class VerboseTB(TBTools):
             etype_str,evalue_str = map(str,(etype,evalue))
         # ... and format it
         exception = ['%s%s%s: %s' % (Colors.excName, etype_str,
-                                     ColorsNormal, evalue_str)]
+                                     ColorsNormal, py3compat.cast_unicode(evalue_str))]
         if (not py3compat.PY3) and type(evalue) is types.InstanceType:
             try:
                 names = [w for w in dir(evalue) if isinstance(w, basestring)]
@@ -949,7 +947,7 @@ class VerboseTB(TBTools):
                 exception.append(_m % (Colors.excName,ColorsNormal))
                 etype_str,evalue_str = map(str,sys.exc_info()[:2])
                 exception.append('%s%s%s: %s' % (Colors.excName,etype_str,
-                                     ColorsNormal, evalue_str))
+                                     ColorsNormal, py3compat.cast_unicode(evalue_str)))
                 names = []
             for name in names:
                 value = text_repr(getattr(evalue, name))
@@ -960,7 +958,7 @@ class VerboseTB(TBTools):
              filepath, lnum = records[-1][1:3]
              #print "file:", str(file), "linenb", str(lnum) # dbg
              filepath = os.path.abspath(filepath)
-             ipinst = ipapi.get()
+             ipinst = get_ipython()
              if ipinst is not None:
                  ipinst.hooks.synchronize_with_editor(filepath, lnum, 0)
         # vds: <<
@@ -1107,8 +1105,8 @@ class FormattedTB(VerboseTB, ListTB):
                       len(self.valid_modes)
             self.mode = self.valid_modes[new_idx]
         elif mode not in self.valid_modes:
-            raise ValueError, 'Unrecognized mode in FormattedTB: <'+mode+'>\n'\
-                  'Valid modes: '+str(self.valid_modes)
+            raise ValueError('Unrecognized mode in FormattedTB: <'+mode+'>\n'
+                             'Valid modes: '+str(self.valid_modes))
         else:
             self.mode = mode
         # include variable details only in 'Verbose' mode
@@ -1132,13 +1130,13 @@ class AutoFormattedTB(FormattedTB):
 
     It will find out about exceptions by itself.
 
-    A brief example:
+    A brief example::
 
-    AutoTB = AutoFormattedTB(mode = 'Verbose',color_scheme='Linux')
-    try:
-      ...
-    except:
-      AutoTB()  # or AutoTB(out=logfile) where logfile is an open file object
+        AutoTB = AutoFormattedTB(mode = 'Verbose',color_scheme='Linux')
+        try:
+          ...
+        except:
+          AutoTB()  # or AutoTB(out=logfile) where logfile is an open file object
     """
 
     def __call__(self,etype=None,evalue=None,etb=None,
@@ -1209,7 +1207,8 @@ class SyntaxTB(ListTB):
 #----------------------------------------------------------------------------
 # module testing (minimal)
 if __name__ == "__main__":
-    def spam(c, (d, e)):
+    def spam(c, d_e):
+        (d, e) = d_e
         x = c + d
         y = c * d
         foo(x, y)
@@ -1235,7 +1234,7 @@ if __name__ == "__main__":
     try:
         print spam(1, (2, 3))
     except:
-        apply(handler, sys.exc_info() )
+        handler(*sys.exc_info())
     print ''
 
     handler = VerboseTB()
@@ -1243,6 +1242,6 @@ if __name__ == "__main__":
     try:
         print spam(1, (2, 3))
     except:
-        apply(handler, sys.exc_info() )
+        handler(*sys.exc_info())
     print ''
 

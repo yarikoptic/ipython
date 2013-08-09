@@ -87,6 +87,7 @@ Some of the known remaining caveats are:
 
 - C extension modules cannot be reloaded, and so cannot be autoreloaded.
 """
+from __future__ import print_function
 
 skip_doctest = True
 
@@ -105,13 +106,9 @@ skip_doctest = True
 #-----------------------------------------------------------------------------
 # Imports
 #-----------------------------------------------------------------------------
-import atexit
-import imp
-import inspect
+
 import os
 import sys
-import threading
-import time
 import traceback
 import types
 import weakref
@@ -122,22 +119,12 @@ try:
 except NameError:
     from imp import reload
 
-from IPython.utils import pyfile
+from IPython.utils import openpy
 from IPython.utils.py3compat import PY3
 
 #------------------------------------------------------------------------------
 # Autoreload functionality
 #------------------------------------------------------------------------------
-
-def _get_compiled_ext():
-    """Official way to get the extension of compiled files (.pyc or .pyo)"""
-    for ext, mode, typ in imp.get_suffixes():
-        if typ == imp.PY_COMPILED:
-            return ext
-
-
-PY_COMPILED_EXT = _get_compiled_ext()
-
 
 class ModuleReloader(object):
     enabled = False
@@ -220,13 +207,12 @@ class ModuleReloader(object):
             path, ext = os.path.splitext(filename)
 
             if ext.lower() == '.py':
-                ext = PY_COMPILED_EXT
-                pyc_filename = pyfile.cache_from_source(filename)
+                pyc_filename = openpy.cache_from_source(filename)
                 py_filename = filename
             else:
                 pyc_filename = filename
                 try:
-                    py_filename = pyfile.source_from_cache(filename)
+                    py_filename = openpy.source_from_cache(filename)
                 except ValueError:
                     continue
 
@@ -244,8 +230,8 @@ class ModuleReloader(object):
                 if py_filename in self.failed:
                     del self.failed[py_filename]
             except:
-                print >> sys.stderr, "[autoreload of %s failed: %s]" % (
-                        modname, traceback.format_exc(1))
+                print("[autoreload of %s failed: %s]" % (
+                        modname, traceback.format_exc(1)), file=sys.stderr)
                 self.failed[py_filename] = pymtime
 
 #------------------------------------------------------------------------------
@@ -324,7 +310,7 @@ else:
                          (lambda a, b: isinstance2(a, b, types.MethodType),
                           lambda a, b: update_function(a.im_func, b.im_func)),
                         ])
-        
+
 
 def update_generic(a, b):
     for type_check, update in UPDATE_RULES:
@@ -408,7 +394,6 @@ def superreload(module, reload=reload, old_objects={}):
 
 from IPython.core.hooks import TryNext
 from IPython.core.magic import Magics, magics_class, line_magic
-from IPython.core.plugin import Plugin
 
 @magics_class
 class AutoreloadMagics(Magics):
@@ -517,21 +502,8 @@ class AutoreloadMagics(Magics):
             pass
 
 
-class AutoreloadPlugin(Plugin):
-    def __init__(self, shell=None, config=None):
-        super(AutoreloadPlugin, self).__init__(shell=shell, config=config)
-        self.auto_magics = AutoreloadMagics(shell)
-        shell.register_magics(self.auto_magics)
-        shell.set_hook('pre_run_code_hook', self.auto_magics.pre_run_code_hook)
-
-
-_loaded = False
-
-
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        plugin = AutoreloadPlugin(shell=ip, config=ip.config)
-        ip.plugin_manager.register_plugin('autoreload', plugin)
-        _loaded = True
+    auto_reload = AutoreloadMagics(ip)
+    ip.register_magics(auto_reload)
+    ip.set_hook('pre_run_code_hook', auto_reload.pre_run_code_hook)

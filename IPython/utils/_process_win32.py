@@ -19,7 +19,6 @@ from __future__ import print_function
 import os
 import sys
 import ctypes
-import msvcrt
 
 from ctypes import c_int, POINTER
 from ctypes.wintypes import LPCWSTR, HLOCAL
@@ -28,7 +27,6 @@ from subprocess import STDOUT
 # our own imports
 from ._process_common import read_no_interrupt, process_handler, arg_split as py_arg_split
 from . import py3compat
-from . import text
 from .encoding import DEFAULT_ENCODING
 
 #-----------------------------------------------------------------------------
@@ -84,7 +82,7 @@ def _find_cmd(cmd):
         path = None
         for ext in extensions:
             try:
-                path = SearchPath(PATH, cmd + ext)[0]
+                path = SearchPath(PATH, cmd, ext)[0]
             except:
                 pass
         if path is None:

@@ -5,7 +5,6 @@
 # Std lib
 import inspect
 import sys
-import unittest
 
 # Third party
 import nose.tools as nt
@@ -36,7 +35,7 @@ def getargspec(obj):
     elif inspect.ismethod(obj):
         func_obj = obj.im_func
     else:
-        raise TypeError, 'arg is not a Python function'
+        raise TypeError('arg is not a Python function')
     args, varargs, varkw = inspect.getargs(func_obj.func_code)
     return args, varargs, varkw, func_obj.func_defaults
 
@@ -180,9 +179,9 @@ def test_linux():
 
 @dec.skip_win32
 def test_win32():
-    nt.assert_not_equals(sys.platform,'win32',"This test can't run under windows")
+    nt.assert_not_equal(sys.platform,'win32',"This test can't run under windows")
 
 @dec.skip_osx
 def test_osx():
-    nt.assert_not_equals(sys.platform,'darwin',"This test can't run under osx")
+    nt.assert_not_equal(sys.platform,'darwin',"This test can't run under osx")
 

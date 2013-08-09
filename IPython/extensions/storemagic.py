@@ -28,14 +28,12 @@ import inspect, os, sys, textwrap
 from IPython.core.error import UsageError
 from IPython.core.fakemodule import FakeModule
 from IPython.core.magic import Magics, magics_class, line_magic
-from IPython.core.plugin import Plugin
 from IPython.testing.skipdoctest import skip_doctest
-from IPython.utils.traitlets import Bool, Instance
 
 #-----------------------------------------------------------------------------
 # Functions and classes
 #-----------------------------------------------------------------------------
-    
+
 def restore_aliases(ip):
     staliases = ip.db.get('stored_aliases', {})
     for k,v in staliases.items():
@@ -90,7 +88,10 @@ class StoreMagics(Magics):
 
           ville@badger:~$ ipython
           In [1]: l
-          Out[1]: ['hello', 10, 'world']
+          NameError: name 'l' is not defined
+          In [2]: %store -r
+          In [3]: l
+          Out[3]: ['hello', 10, 'world']
 
         Usage:
 
@@ -100,8 +101,10 @@ class StoreMagics(Magics):
                                 to disk
         * ``%store -d spam``  - Remove the variable and its value from storage
         * ``%store -z``       - Remove all variables from storage
-        * ``%store -r``       - Refresh all variables from store (delete
+        * ``%store -r``       - Refresh all variables from store (overwrite
                                 current vals)
+        * ``%store -r spam bar`` - Refresh specified variables from store
+                                   (delete current val)
         * ``%store foo >a.txt``  - Store value of foo to new file a.txt
         * ``%store foo >>a.txt`` - Append value of foo to file a.txt
 
@@ -119,7 +122,7 @@ class StoreMagics(Magics):
         ip = self.shell
         db = ip.db
         # delete
-        if opts.has_key('d'):
+        if 'd' in opts:
             try:
                 todel = args[0]
             except IndexError:
@@ -130,13 +133,21 @@ class StoreMagics(Magics):
                 except:
                     raise UsageError("Can't delete variable '%s'" % todel)
         # reset
-        elif opts.has_key('z'):
+        elif 'z' in opts:
             for k in db.keys('autorestore/*'):
                 del db[k]
 
-        elif opts.has_key('r'):
-            refresh_variables(ip)
-
+        elif 'r' in opts:
+            if args:
+                for arg in args:
+                    try:
+                        obj = db['autorestore/' + arg]
+                    except KeyError:
+                        print "no stored variable %s" % arg
+                    else:
+                        ip.user_ns[arg] = obj
+            else:
+                restore_data(ip)
 
         # run without arguments -> list variables & values
         elif not args:
@@ -211,24 +222,6 @@ class StoreMagics(Magics):
                 print "Stored '%s' (%s)" % (args[0], obj.__class__.__name__)
 
 
-class StoreMagic(Plugin):
-    shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
-    autorestore = Bool(False, config=True)
-    
-    def __init__(self, shell, config):
-        super(StoreMagic, self).__init__(shell=shell, config=config)
-        shell.register_magics(StoreMagics)
-        
-        if self.autorestore:
-            restore_data(shell)
-
-
-_loaded = False
-
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        plugin = StoreMagic(shell=ip, config=ip.config)
-        ip.plugin_manager.register_plugin('storemagic', plugin)
-        _loaded = True
+    ip.register_magics(StoreMagics)

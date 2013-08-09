@@ -47,6 +47,8 @@ import nose.core
 from nose.plugins import doctests, Plugin
 from nose.util import anyp, getpackage, test_address, resolve_name, tolist
 
+# Our own imports
+
 #-----------------------------------------------------------------------------
 # Module globals and other constants
 #-----------------------------------------------------------------------------
@@ -308,7 +310,7 @@ class DocTestCase(doctests.DocTestCase):
         # and letting any other error propagate.
         try:
             super(DocTestCase, self).tearDown()
-        except AttributeError, exc:
+        except AttributeError as exc:
             if exc.args[0] != self._result_var:
                 raise
 
@@ -380,17 +382,11 @@ class IPDocTestParser(doctest.DocTestParser):
 
     def ip2py(self,source):
         """Convert input IPython source into valid Python."""
-        out = []
-        newline = out.append
-        #print 'IPSRC:\n',source,'\n###'  # dbg
-        # The input source must be first stripped of all bracketing whitespace
-        # and turned into lines, so it looks to the parser like regular user
-        # input
-        for lnum,line in enumerate(source.strip().splitlines()):
-            newline(_ip.prefilter(line,lnum>0))
-        newline('')  # ensure a closing newline, needed by doctest
-        #print "PYSRC:", '\n'.join(out)  # dbg
-        return '\n'.join(out)
+        block = _ip.input_transformer_manager.transform_cell(source)
+        if len(block.splitlines()) == 1:
+            return _ip.prefilter(block)
+        else:
+            return block
 
     def parse(self, string, name='<string>'):
         """

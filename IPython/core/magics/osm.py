@@ -26,15 +26,16 @@ from pprint import pformat
 from IPython.core import magic_arguments
 from IPython.core import oinspect
 from IPython.core import page
-from IPython.core.error import UsageError, StdinNotImplementedError
+from IPython.core.error import UsageError
 from IPython.core.magic import  (
     Magics, compress_dhist, magics_class, line_magic, cell_magic, line_cell_magic
 )
 from IPython.testing.skipdoctest import skip_doctest
-from IPython.utils.io import file_read, nlprint
-from IPython.utils.path import get_py_filename, unquote_filename
+from IPython.utils.openpy import source_to_unicode
+from IPython.utils.path import unquote_filename
 from IPython.utils.process import abbrev_cwd
 from IPython.utils.terminal import set_term_title
+
 #-----------------------------------------------------------------------------
 # Magic implementation classes
 #-----------------------------------------------------------------------------
@@ -147,7 +148,7 @@ class OSMagics(Magics):
         from IPython.core.alias import InvalidAliasError
 
         # for the benefit of module completer in ipy_completers.py
-        del self.shell.db['rootmodules']
+        del self.shell.db['rootmodules_cache']
 
         path = [os.path.abspath(os.path.expanduser(p)) for p in
             os.environ.get('PATH','').split(os.pathsep)]
@@ -181,8 +182,9 @@ class OSMagics(Magics):
                             try:
                                 # Removes dots from the name since ipython
                                 # will assume names with dots to be python.
-                                self.shell.alias_manager.define_alias(
-                                    ff.replace('.',''), ff)
+                                if ff not in self.shell.alias_manager:
+                                    self.shell.alias_manager.define_alias(
+                                        ff.replace('.',''), ff)
                             except InvalidAliasError:
                                 pass
                             else:
@@ -401,7 +403,7 @@ class OSMagics(Magics):
 
         %dhist       -> print full history\\
         %dhist n     -> print last n entries only\\
-        %dhist n1 n2 -> print entries between n1 and n2 (n1 not included)\\
+        %dhist n1 n2 -> print entries between n1 and n2 (n2 not included)\\
 
         This history is automatically maintained by the %cd command, and
         always available as the global list variable _dh. You can use %cd -<n>
@@ -423,14 +425,15 @@ class OSMagics(Magics):
                 ini,fin = max(len(dh)-(args[0]),0),len(dh)
             elif len(args) == 2:
                 ini,fin = args
+                fin = min(fin, len(dh))
             else:
                 self.arg_err(self.dhist)
                 return
         else:
             ini,fin = 0,len(dh)
-        nlprint(dh,
-                header = 'Directory history (kept in _dh)',
-                start=ini,stop=fin)
+        print 'Directory history (kept in _dh)'
+        for i in range(ini, fin):
+            print "%d: %s" % (i, dh[i])
 
     @skip_doctest
     @line_magic
@@ -681,41 +684,45 @@ class OSMagics(Magics):
         %pycat myMacro
         %pycat http://www.example.com/myscript.py
         """
+        if not parameter_s:
+            raise UsageError('Missing filename, URL, input history range, '
+                             'or macro.')
 
         try :
-            cont = self.shell.find_user_code(parameter_s)
+            cont = self.shell.find_user_code(parameter_s, skip_encoding_cookie=False)
         except (ValueError, IOError):
             print "Error: no such file, variable, URL, history range or macro"
             return
 
-        page.page(self.shell.pycolorize(cont))
+        page.page(self.shell.pycolorize(source_to_unicode(cont)))
 
     @magic_arguments.magic_arguments()
     @magic_arguments.argument(
-        '-a', '--amend', action='store_true', default=False,
-        help='Open file for amending if it exists'
+        '-a', '--append', action='store_true', default=False,
+        help='Append contents of the cell to an existing file. '
+             'The file will be created if it does not exist.'
     )
     @magic_arguments.argument(
         'filename', type=unicode,
         help='file to write'
     )
     @cell_magic
-    def file(self, line, cell):
+    def writefile(self, line, cell):
         """Write the contents of the cell to a file.
         
-        For frontends that do not support stdin (Notebook), -f is implied.
+        The file will be overwritten unless the -a (--append) flag is specified.
         """
-        args = magic_arguments.parse_argstring(self.file, line)
+        args = magic_arguments.parse_argstring(self.writefile, line)
         filename = os.path.expanduser(unquote_filename(args.filename))
         
         if os.path.exists(filename):
-            if args.amend:
-                print "Amending to %s" % filename
+            if args.append:
+                print "Appending to %s" % filename
             else:
                 print "Overwriting %s" % filename
         else:
             print "Writing %s" % filename
         
-        mode = 'a' if args.amend else 'w'
+        mode = 'a' if args.append else 'w'
         with io.open(filename, mode, encoding='utf-8') as f:
             f.write(cell)

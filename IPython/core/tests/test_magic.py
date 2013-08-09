@@ -28,12 +28,13 @@ from IPython.core.magic import (Magics, magics_class, line_magic,
                                 cell_magic, line_cell_magic,
                                 register_line_magic, register_cell_magic,
                                 register_line_cell_magic)
-from IPython.core.magics import execution, script
+from IPython.core.magics import execution, script, code
 from IPython.nbformat.v3.tests.nbexamples import nb0
 from IPython.nbformat import current
 from IPython.testing import decorators as dec
 from IPython.testing import tools as tt
 from IPython.utils import py3compat
+from IPython.utils.io import capture_output
 from IPython.utils.tempdir import TemporaryDirectory
 from IPython.utils.process import find_cmd
 
@@ -53,14 +54,14 @@ def test_rehashx():
     _ip.magic('rehashx')
     # Practically ALL ipython development systems will have more than 10 aliases
 
-    yield (nt.assert_true, len(_ip.alias_manager.alias_table) > 10)
+    nt.assert_true(len(_ip.alias_manager.alias_table) > 10)
     for key, val in _ip.alias_manager.alias_table.iteritems():
         # we must strip dots from alias names
-        nt.assert_true('.' not in key)
+        nt.assert_not_in('.', key)
 
     # rehashx must fill up syscmdlist
     scoms = _ip.db['syscmdlist']
-    yield (nt.assert_true, len(scoms) > 10)
+    nt.assert_true(len(scoms) > 10)
 
 
 def test_magic_parse_options():
@@ -74,16 +75,16 @@ def test_magic_parse_options():
         expected = 'c:x'
     else:
         expected = path
-    nt.assert_equals(opts['f'], expected)
+    nt.assert_equal(opts['f'], expected)
 
 def test_magic_parse_long_options():
     """Magic.parse_options can handle --foo=bar long options"""
     ip = get_ipython()
     m = DummyMagics(ip)
     opts, _ = m.parse_options('--foo --bar=bubble', 'a', 'foo', 'bar=')
-    nt.assert_true('foo' in opts)
-    nt.assert_true('bar' in opts)
-    nt.assert_true(opts['bar'], "bubble")
+    nt.assert_in('foo', opts)
+    nt.assert_in('bar', opts)
+    nt.assert_equal(opts['bar'], "bubble")
 
 
 @dec.skip_without('sqlite3')
@@ -197,8 +198,8 @@ def test_macro():
     ip.magic("macro test 1-3")
     nt.assert_equal(ip.user_ns["test"].value, "\n".join(cmds)+"\n")
     
-    # List macros.
-    assert "test" in ip.magic("macro")
+    # List macros
+    nt.assert_in("test", ip.magic("macro"))
 
 
 @dec.skip_without('sqlite3')
@@ -218,14 +219,26 @@ def test_macro_run():
         ip.run_cell("test")
 
 
+def test_magic_magic():
+    """Test %magic"""
+    ip = get_ipython()
+    with capture_output() as captured:
+        ip.magic("magic")
+    
+    stdout = captured.stdout
+    nt.assert_in('%magic', stdout)
+    nt.assert_in('IPython', stdout)
+    nt.assert_in('Available', stdout)
+
+
 @dec.skipif_not_numpy
 def test_numpy_reset_array_undec():
     "Test '%reset array' functionality"
     _ip.ex('import numpy as np')
     _ip.ex('a = np.empty(2)')
-    yield (nt.assert_true, 'a' in _ip.user_ns)
+    nt.assert_in('a', _ip.user_ns)
     _ip.magic('reset -f array')
-    yield (nt.assert_false, 'a' in _ip.user_ns)
+    nt.assert_not_in('a', _ip.user_ns)
 
 def test_reset_out():
     "Test '%reset out' magic"
@@ -235,7 +248,7 @@ def test_reset_out():
     nt.assert_true('dead' in [_ip.user_ns[x] for x in '_','__','___'])
     _ip.magic('reset -f out')
     nt.assert_false('dead' in [_ip.user_ns[x] for x in '_','__','___'])
-    nt.assert_true(len(_ip.user_ns['Out']) == 0)
+    nt.assert_equal(len(_ip.user_ns['Out']), 0)
 
 def test_reset_in():
     "Test '%reset in' magic"
@@ -244,7 +257,7 @@ def test_reset_in():
     nt.assert_true('parrot' in [_ip.user_ns[x] for x in '_i','_ii','_iii'])
     _ip.magic('%reset -f in')
     nt.assert_false('parrot' in [_ip.user_ns[x] for x in '_i','_ii','_iii'])
-    nt.assert_true(len(set(_ip.user_ns['In'])) == 1)
+    nt.assert_equal(len(set(_ip.user_ns['In'])), 1)
 
 def test_reset_dhist():
     "Test '%reset dhist' magic"
@@ -253,17 +266,14 @@ def test_reset_dhist():
     _ip.magic('cd -')
     nt.assert_true(len(_ip.user_ns['_dh']) > 0)
     _ip.magic('reset -f dhist')
-    nt.assert_true(len(_ip.user_ns['_dh']) == 0)
+    nt.assert_equal(len(_ip.user_ns['_dh']), 0)
     _ip.run_cell("_dh = [d for d in tmp]") #restore
 
 def test_reset_in_length():
     "Test that '%reset in' preserves In[] length"
     _ip.run_cell("print 'foo'")
     _ip.run_cell("reset -f in")
-    nt.assert_true(len(_ip.user_ns['In']) == _ip.displayhook.prompt_count+1)
-
-def test_time():
-    _ip.magic('time None')
+    nt.assert_equal(len(_ip.user_ns['In']), _ip.displayhook.prompt_count+1)
 
 def test_tb_syntaxerror():
     """test %tb after a SyntaxError"""
@@ -280,25 +290,39 @@ def test_tb_syntaxerror():
         sys.stdout = save_stdout
     # trim output, and only check the last line
     last_line = out.rstrip().splitlines()[-1].strip()
-    nt.assert_equals(last_line, "SyntaxError: invalid syntax")
+    nt.assert_equal(last_line, "SyntaxError: invalid syntax")
 
 
-@py3compat.doctest_refactor_print
-def doctest_time():
-    """
-    In [10]: %time None
-    CPU times: user 0.00 s, sys: 0.00 s, total: 0.00 s
-    Wall time: 0.00 s
+def test_time():
+    ip = get_ipython()
     
-    In [11]: def f(kmjy):
-       ....:    %time print 2*kmjy
-       
-    In [12]: f(3)
-    6
-    CPU times: user 0.00 s, sys: 0.00 s, total: 0.00 s
-    Wall time: 0.00 s
-    """
+    with tt.AssertPrints("Wall time: "):
+        ip.run_cell("%time None")
+    
+    ip.run_cell("def f(kmjy):\n"
+                "    %time print (2*kmjy)")
+    
+    with tt.AssertPrints("Wall time: "):
+        with tt.AssertPrints("hihi", suppress=False):
+            ip.run_cell("f('hi')")
 
+
+@dec.skip_win32
+def test_time2():
+    ip = get_ipython()
+    
+    with tt.AssertPrints("CPU times: user "):
+        ip.run_cell("%time None")
+
+def test_time3():
+    """Erroneous magic function calls, issue gh-3334"""
+    ip = get_ipython()
+    ip.user_ns.pop('run', None)
+    
+    with tt.AssertNotPrints("not found", channel='stderr'):
+        ip.run_cell("%%time\n"
+                    "run = 0\n"
+                    "run += 1")
 
 def test_doctest_mode():
     "Toggle doctest_mode twice, it should be a no-op and run without error"
@@ -452,8 +476,6 @@ def test_timeit_arguments():
 
 def test_timeit_special_syntax():
     "Test %%timeit with IPython special syntax"
-    from IPython.core.magic import register_line_magic
-
     @register_line_magic
     def lmagic(line):
         ip = get_ipython()
@@ -484,11 +506,12 @@ def test_extension():
         _ip.user_ns.pop('arq', None)
         invalidate_caches()   # Clear import caches
         _ip.magic("load_ext daft_extension")
-        tt.assert_equal(_ip.user_ns['arq'], 185)
+        nt.assert_equal(_ip.user_ns['arq'], 185)
         _ip.magic("unload_ext daft_extension")
         assert 'arq' not in _ip.user_ns
     finally:
         _ip.ipython_dir = orig_ipython_dir
+        tmpdir.cleanup()
         
 def test_notebook_export_json():
     with TemporaryDirectory() as td:
@@ -531,10 +554,10 @@ class CellMagicTestCase(TestCase):
     def check_ident(self, magic):
         # Manually called, we get the result
         out = _ip.run_cell_magic(magic, 'a', 'b')
-        nt.assert_equals(out, ('a','b'))
+        nt.assert_equal(out, ('a','b'))
         # Via run_cell, it goes into the user's namespace via displayhook
         _ip.run_cell('%%' + magic +' c\nd')
-        nt.assert_equals(_ip.user_ns['_'], ('c','d'))
+        nt.assert_equal(_ip.user_ns['_'], ('c','d'))
 
     def test_cell_magic_func_deco(self):
         "Cell magic using simple decorator"
@@ -577,7 +600,7 @@ class CellMagicTestCase(TestCase):
         self.check_ident('cellm4')
         # Check that nothing is registered as 'cellm33'
         c33 = _ip.find_cell_magic('cellm33')
-        nt.assert_equals(c33, None)
+        nt.assert_equal(c33, None)
 
 def test_file():
     """Basic %%file"""
@@ -585,6 +608,21 @@ def test_file():
     with TemporaryDirectory() as td:
         fname = os.path.join(td, 'file1')
         ip.run_cell_magic("file", fname, u'\n'.join([
+            'line1',
+            'line2',
+        ]))
+        with open(fname) as f:
+            s = f.read()
+        nt.assert_in('line1\n', s)
+        nt.assert_in('line2', s)
+
+def test_file_var_expand():
+    """%%file $filename"""
+    ip = get_ipython()
+    with TemporaryDirectory() as td:
+        fname = os.path.join(td, 'file1')
+        ip.user_ns['filename'] = fname
+        ip.run_cell_magic("file", '$filename', u'\n'.join([
             'line1',
             'line2',
         ]))
@@ -636,39 +674,39 @@ def test_script_config():
 def test_script_out():
     ip = get_ipython()
     ip.run_cell_magic("script", "--out output sh", "echo 'hi'")
-    nt.assert_equals(ip.user_ns['output'], 'hi\n')
+    nt.assert_equal(ip.user_ns['output'], 'hi\n')
 
 @dec.skip_win32
 def test_script_err():
     ip = get_ipython()
     ip.run_cell_magic("script", "--err error sh", "echo 'hello' >&2")
-    nt.assert_equals(ip.user_ns['error'], 'hello\n')
+    nt.assert_equal(ip.user_ns['error'], 'hello\n')
 
 @dec.skip_win32
 def test_script_out_err():
     ip = get_ipython()
     ip.run_cell_magic("script", "--out output --err error sh", "echo 'hi'\necho 'hello' >&2")
-    nt.assert_equals(ip.user_ns['output'], 'hi\n')
-    nt.assert_equals(ip.user_ns['error'], 'hello\n')
+    nt.assert_equal(ip.user_ns['output'], 'hi\n')
+    nt.assert_equal(ip.user_ns['error'], 'hello\n')
 
 @dec.skip_win32
 def test_script_bg_out():
     ip = get_ipython()
     ip.run_cell_magic("script", "--bg --out output sh", "echo 'hi'")
-    nt.assert_equals(ip.user_ns['output'].read(), b'hi\n')
+    nt.assert_equal(ip.user_ns['output'].read(), b'hi\n')
 
 @dec.skip_win32
 def test_script_bg_err():
     ip = get_ipython()
     ip.run_cell_magic("script", "--bg --err error sh", "echo 'hello' >&2")
-    nt.assert_equals(ip.user_ns['error'].read(), b'hello\n')
+    nt.assert_equal(ip.user_ns['error'].read(), b'hello\n')
 
 @dec.skip_win32
 def test_script_bg_out_err():
     ip = get_ipython()
     ip.run_cell_magic("script", "--bg --out output --err error sh", "echo 'hi'\necho 'hello' >&2")
-    nt.assert_equals(ip.user_ns['output'].read(), b'hi\n')
-    nt.assert_equals(ip.user_ns['error'].read(), b'hello\n')
+    nt.assert_equal(ip.user_ns['output'].read(), b'hi\n')
+    nt.assert_equal(ip.user_ns['error'].read(), b'hello\n')
 
 def test_script_defaults():
     ip = get_ipython()
@@ -705,12 +743,12 @@ def test_line_cell_info():
     oinfo = ip.object_inspect('%%foo')
     nt.assert_true(oinfo['found'])
     nt.assert_true(oinfo['ismagic'])
-    nt.assert_equals(oinfo['docstring'], FooFoo.cell_foo.__doc__)
+    nt.assert_equal(oinfo['docstring'], FooFoo.cell_foo.__doc__)
 
     oinfo = ip.object_inspect('%foo')
     nt.assert_true(oinfo['found'])
     nt.assert_true(oinfo['ismagic'])
-    nt.assert_equals(oinfo['docstring'], FooFoo.line_foo.__doc__)
+    nt.assert_equal(oinfo['docstring'], FooFoo.line_foo.__doc__)
 
 def test_multiple_magics():
     ip = get_ipython()
@@ -729,25 +767,45 @@ def test_alias_magic():
 
     # Basic operation: both cell and line magics are created, if possible.
     ip.run_line_magic('alias_magic', 'timeit_alias timeit')
-    nt.assert_true('timeit_alias' in mm.magics['line'])
-    nt.assert_true('timeit_alias' in mm.magics['cell'])
+    nt.assert_in('timeit_alias', mm.magics['line'])
+    nt.assert_in('timeit_alias', mm.magics['cell'])
 
     # --cell is specified, line magic not created.
     ip.run_line_magic('alias_magic', '--cell timeit_cell_alias timeit')
-    nt.assert_false('timeit_cell_alias' in mm.magics['line'])
-    nt.assert_true('timeit_cell_alias' in mm.magics['cell'])
+    nt.assert_not_in('timeit_cell_alias', mm.magics['line'])
+    nt.assert_in('timeit_cell_alias', mm.magics['cell'])
 
     # Test that line alias is created successfully.
     ip.run_line_magic('alias_magic', '--line env_alias env')
     nt.assert_equal(ip.run_line_magic('env', ''),
                     ip.run_line_magic('env_alias', ''))
 
+def test_save():
+    """Test %save."""
+    ip = get_ipython()
+    ip.history_manager.reset()   # Clear any existing history.
+    cmds = [u"a=1", u"def b():\n  return a**2", u"print(a, b())"]
+    for i, cmd in enumerate(cmds, start=1):
+        ip.history_manager.store_inputs(i, cmd)
+    with TemporaryDirectory() as tmpdir:
+        file = os.path.join(tmpdir, "testsave.py")
+        ip.run_line_magic("save", "%s 1-10" % file)
+        with open(file) as f:
+            content = f.read()
+            nt.assert_equal(content.count(cmds[0]), 1)
+            nt.assert_in('coding: utf-8', content)
+        ip.run_line_magic("save", "-a %s 1-10" % file)
+        with open(file) as f:
+            content = f.read()
+            nt.assert_equal(content.count(cmds[0]), 2)
+            nt.assert_in('coding: utf-8', content)
+
 
 def test_store():
     """Test %store."""
     ip = get_ipython()
     ip.run_line_magic('load_ext', 'storemagic')
-
+    
     # make sure the storage is empty
     ip.run_line_magic('store', '-z')
     ip.user_ns['var'] = 42
@@ -760,3 +818,49 @@ def test_store():
     ip.user_ns['var'] = 39
     ip.run_line_magic('store' , '-r')
     nt.assert_equal(ip.user_ns['var'], 39)
+
+
+def _run_edit_test(arg_s, exp_filename=None,
+                        exp_lineno=-1,
+                        exp_contents=None,
+                        exp_is_temp=None):
+    ip = get_ipython()
+    M = code.CodeMagics(ip)
+    last_call = ['','']
+    opts,args = M.parse_options(arg_s,'prxn:')
+    filename, lineno, is_temp = M._find_edit_target(ip, args, opts, last_call)
+        
+    if exp_filename is not None:
+        nt.assert_equal(exp_filename, filename)
+    if exp_contents is not None:
+        with io.open(filename, 'r') as f:
+            contents = f.read()
+        nt.assert_equal(exp_contents, contents)
+    if exp_lineno != -1:
+        nt.assert_equal(exp_lineno, lineno)
+    if exp_is_temp is not None:
+        nt.assert_equal(exp_is_temp, is_temp)
+
+
+def test_edit_interactive():
+    """%edit on interactively defined objects"""
+    ip = get_ipython()
+    n = ip.execution_count
+    ip.run_cell(u"def foo(): return 1", store_history=True)
+    
+    try:
+        _run_edit_test("foo")
+    except code.InteractivelyDefined as e:
+        nt.assert_equal(e.index, n)
+    else:
+        raise AssertionError("Should have raised InteractivelyDefined")
+
+
+def test_edit_cell():
+    """%edit [cell id]"""
+    ip = get_ipython()
+    
+    ip.run_cell(u"def foo(): return 1", store_history=True)
+    
+    # test
+    _run_edit_test("1", exp_contents=ip.user_ns['In'][1], exp_is_temp=True)

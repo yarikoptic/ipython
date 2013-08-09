@@ -15,20 +15,18 @@
 # Stdlib
 import inspect
 import io
-import json
 import os
+import re
 import sys
-from urllib2 import urlopen
 
 # Our own packages
-from IPython.core.error import TryNext, StdinNotImplementedError
+from IPython.core.error import TryNext, StdinNotImplementedError, UsageError
 from IPython.core.macro import Macro
 from IPython.core.magic import Magics, magics_class, line_magic
 from IPython.core.oinspect import find_file, find_source_lines
 from IPython.testing.skipdoctest import skip_doctest
-from IPython.utils import openpy
 from IPython.utils import py3compat
-from IPython.utils.io import file_read
+from IPython.utils.contexts import preserve_keys
 from IPython.utils.path import get_py_filename, unquote_filename
 from IPython.utils.warn import warn
 
@@ -38,6 +36,13 @@ from IPython.utils.warn import warn
 
 # Used for exception handling in magic_edit
 class MacroToEdit(ValueError): pass
+
+ipython_input_pat = re.compile(r"<ipython\-input\-(\d+)-[a-z\d]+>$")
+
+class InteractivelyDefined(Exception):
+    """Exception for interactively defined variable in magic_edit"""
+    def __init__(self, index):
+        self.index = index
 
 
 @magics_class
@@ -61,6 +66,8 @@ class CodeMagics(Magics):
           -f: force overwrite.  If file exists, %save will prompt for overwrite
           unless -f is given.
 
+          -a: append to the file instead of overwriting it.
+
         This function uses the same syntax as %history for input ranges,
         then saves the lines to the filename you specify.
 
@@ -70,14 +77,19 @@ class CodeMagics(Magics):
         If `-r` option is used, the default extension is `.ipy`.
         """
 
-        opts,args = self.parse_options(parameter_s,'fr',mode='list')
+        opts,args = self.parse_options(parameter_s,'fra',mode='list')
+        if not args:
+            raise UsageError('Missing filename.')
         raw = 'r' in opts
         force = 'f' in opts
+        append = 'a' in opts
+        mode = 'a' if append else 'w'
         ext = u'.ipy' if raw else u'.py'
         fname, codefrom = unquote_filename(args[0]), " ".join(args[1:])
         if not fname.endswith((u'.py',u'.ipy')):
             fname += ext
-        if os.path.isfile(fname) and not force:
+        file_exists = os.path.isfile(fname)
+        if file_exists and not force and not append:
             try:
                 overwrite = self.shell.ask_yes_no('File `%s` exists. Overwrite (y/[N])? ' % fname, default='n')
             except StdinNotImplementedError:
@@ -91,9 +103,14 @@ class CodeMagics(Magics):
         except (TypeError, ValueError) as e:
             print e.args[0]
             return
-        with io.open(fname,'w', encoding="utf-8") as f:
-            f.write(u"# coding: utf-8\n")
-            f.write(py3compat.cast_unicode(cmds))
+        out = py3compat.cast_unicode(cmds)
+        with io.open(fname, mode, encoding="utf-8") as f:
+            if not file_exists or not append:
+                f.write(u"# coding: utf-8\n")
+            f.write(out)
+            # make sure we end on a newline
+            if not out.endswith(u'\n'):
+                f.write(u'\n')
         print 'The following commands were written to file `%s`:' % fname
         print cmds
 
@@ -120,6 +137,8 @@ class CodeMagics(Magics):
             print e.args[0]
             return
 
+        from urllib2 import urlopen  # Deferred import
+        import json
         post_data = json.dumps({
           "description": opts.get('d', "Pasted from IPython"),
           "public": True,
@@ -138,7 +157,7 @@ class CodeMagics(Magics):
     def loadpy(self, arg_s):
         """Alias of `%load`
 
-        `%loadpy` has gained some flexibility and droped the requirement of a `.py`
+        `%loadpy` has gained some flexibility and dropped the requirement of a `.py`
         extension. So it has been renamed simply into %load. You can look at
         `%load`'s docstring for more info.
         """
@@ -168,6 +187,9 @@ class CodeMagics(Magics):
         %load http://www.example.com/myscript.py
         """
         opts,args = self.parse_options(arg_s,'y')
+        if not args:
+            raise UsageError('Missing filename, URL, input history range, '
+                             'or macro.')
 
         contents = self.shell.find_user_code(args)
         l = len(contents)
@@ -218,7 +240,7 @@ class CodeMagics(Magics):
 
         if opts_prev:
             args = '_%s' % last_call[0]
-            if not shell.user_ns.has_key(args):
+            if args not in shell.user_ns:
                 args = last_call[1]
 
         # by default this is done with temp files, except when the given
@@ -250,7 +272,7 @@ class CodeMagics(Magics):
                     if filename is None:
                         warn("Argument given (%s) can't be found as a variable "
                              "or as a filename." % args)
-                        return
+                        return (None, None, None)
                     use_temp = False
 
                 except DataIsObject:
@@ -277,12 +299,18 @@ class CodeMagics(Magics):
                                     # target instead
                                     data = attr
                                     break
-
+                        
+                        m = ipython_input_pat.match(os.path.basename(filename))
+                        if m:
+                            raise InteractivelyDefined(int(m.groups()[0]))
+                        
                         datafile = 1
                     if filename is None:
                         filename = make_filename(args)
                         datafile = 1
-                        warn('Could not find file where `%s` is defined.\n'
+                        if filename is not None:
+                            # only warn about this if we get a real name
+                            warn('Could not find file where `%s` is defined.\n'
                              'Opening a file named `%s`' % (args, filename))
                     # Now, make sure we can actually read the source (if it was
                     # in a temp file it's gone by now).
@@ -292,9 +320,9 @@ class CodeMagics(Magics):
                         if lineno is None:
                             filename = make_filename(args)
                             if filename is None:
-                                warn('The file `%s` where `%s` was defined '
-                                     'cannot be read.' % (filename, data))
-                                return
+                                warn('The file where `%s` was defined '
+                                     'cannot be read or found.' % data)
+                                return (None, None, None)
                     use_temp = False
 
         if use_temp:
@@ -323,11 +351,6 @@ class CodeMagics(Magics):
         mvalue = mfile.read()
         mfile.close()
         self.shell.user_ns[mname] = Macro(mvalue)
-
-    @line_magic
-    def ed(self, parameter_s=''):
-        """Alias to %edit."""
-        return self.edit(parameter_s)
 
     @skip_doctest
     @line_magic
@@ -422,7 +445,7 @@ class CodeMagics(Magics):
         This is an example of creating a simple function inside the editor and
         then modifying it. First, start up the editor::
 
-          In [1]: ed
+          In [1]: edit
           Editing... done. Executing edited code...
           Out[1]: 'def foo():\\n    print "foo() was defined in an editing
           session"\\n'
@@ -435,7 +458,7 @@ class CodeMagics(Magics):
         Now we edit foo.  IPython automatically loads the editor with the
         (temporary) file where foo() was previously defined::
 
-          In [3]: ed foo
+          In [3]: edit foo
           Editing... done. Executing edited code...
 
         And if we call foo() again we get the modified version::
@@ -446,21 +469,21 @@ class CodeMagics(Magics):
         Here is an example of how to edit a code snippet successive
         times. First we call the editor::
 
-          In [5]: ed
+          In [5]: edit
           Editing... done. Executing edited code...
           hello
           Out[5]: "print 'hello'\\n"
 
         Now we call it again with the previous output (stored in _)::
 
-          In [6]: ed _
+          In [6]: edit _
           Editing... done. Executing edited code...
           hello world
           Out[6]: "print 'hello world'\\n"
 
         Now we call it with the output #8 (stored in _8, also as Out[8])::
 
-          In [7]: ed _8
+          In [7]: edit _8
           Editing... done. Executing edited code...
           hello again
           Out[7]: "print 'hello again'\\n"
@@ -482,6 +505,15 @@ class CodeMagics(Magics):
         except MacroToEdit as e:
             self._edit_macro(args, e.args[0])
             return
+        except InteractivelyDefined as e:
+            print "Editing In[%i]" % e.index
+            args = str(e.index)
+            filename, lineno, is_temp = self._find_edit_target(self.shell, 
+                                                       args, opts, last_call)
+        if filename is None:
+            # nothing was found, warnings have already been issued,
+            # just give up.
+            return
 
         # do actual editing here
         print 'Editing...',
@@ -498,23 +530,28 @@ class CodeMagics(Magics):
         # XXX TODO: should this be generalized for all string vars?
         # For now, this is special-cased to blocks created by cpaste
         if args.strip() == 'pasted_block':
-            self.shell.user_ns['pasted_block'] = file_read(filename)
+            with open(filename, 'r') as f:
+                self.shell.user_ns['pasted_block'] = f.read()
 
         if 'x' in opts:  # -x prevents actual execution
             print
         else:
             print 'done. Executing edited code...'
-            if 'r' in opts:    # Untranslated IPython code
-                self.shell.run_cell(file_read(filename),
-                                                    store_history=False)
-            else:
-                self.shell.safe_execfile(filename, self.shell.user_ns,
-                                         self.shell.user_ns)
+            with preserve_keys(self.shell.user_ns, '__file__'):
+                if not is_temp:
+                    self.shell.user_ns['__file__'] = filename
+                if 'r' in opts:    # Untranslated IPython code
+                    with open(filename, 'r') as f:
+                        source = f.read()
+                    self.shell.run_cell(source, store_history=False)
+                else:
+                    self.shell.safe_execfile(filename, self.shell.user_ns,
+                                             self.shell.user_ns)
 
         if is_temp:
             try:
                 return open(filename).read()
-            except IOError,msg:
+            except IOError as msg:
                 if msg.filename == filename:
                     warn('File not found. Did you forget to save?')
                     return

@@ -1,105 +1,107 @@
 # -*- coding: utf-8 -*-
 """
-    pretty
-    ~~
+Python advanced pretty printer.  This pretty printer is intended to
+replace the old `pprint` python module which does not allow developers
+to provide their own pretty print callbacks.
 
-    Python advanced pretty printer.  This pretty printer is intended to
-    replace the old `pprint` python module which does not allow developers
-    to provide their own pretty print callbacks.
-
-    This module is based on ruby's `prettyprint.rb` library by `Tanaka Akira`.
+This module is based on ruby's `prettyprint.rb` library by `Tanaka Akira`.
 
 
-    Example Usage
-    =============
+Example Usage
+-------------
 
-    To directly print the representation of an object use `pprint`::
+To directly print the representation of an object use `pprint`::
 
-        from pretty import pprint
-        pprint(complex_object)
+    from pretty import pprint
+    pprint(complex_object)
 
-    To get a string of the output use `pretty`::
+To get a string of the output use `pretty`::
 
-        from pretty import pretty
-        string = pretty(complex_object)
-
-
-    Extending
-    =========
-
-    The pretty library allows developers to add pretty printing rules for their
-    own objects.  This process is straightforward.  All you have to do is to
-    add a `_repr_pretty_` method to your object and call the methods on the
-    pretty printer passed::
-
-        class MyObject(object):
-
-            def _repr_pretty_(self, p, cycle):
-                ...
-
-    Depending on the python version you want to support you have two
-    possibilities.  The following list shows the python 2.5 version and the
-    compatibility one.
+    from pretty import pretty
+    string = pretty(complex_object)
 
 
-    Here the example implementation of a `_repr_pretty_` method for a list
-    subclass for python 2.5 and higher (python 2.5 requires the with statement
-    __future__ import)::
+Extending
+---------
 
-        class MyList(list):
+The pretty library allows developers to add pretty printing rules for their
+own objects.  This process is straightforward.  All you have to do is to
+add a `_repr_pretty_` method to your object and call the methods on the
+pretty printer passed::
 
-            def _repr_pretty_(self, p, cycle):
-                if cycle:
-                    p.text('MyList(...)')
-                else:
-                    with p.group(8, 'MyList([', '])'):
-                        for idx, item in enumerate(self):
-                            if idx:
-                                p.text(',')
-                                p.breakable()
-                            p.pretty(item)
+    class MyObject(object):
 
-    The `cycle` parameter is `True` if pretty detected a cycle.  You *have* to
-    react to that or the result is an infinite loop.  `p.text()` just adds
-    non breaking text to the output, `p.breakable()` either adds a whitespace
-    or breaks here.  If you pass it an argument it's used instead of the
-    default space.  `p.pretty` prettyprints another object using the pretty print
-    method.
+        def _repr_pretty_(self, p, cycle):
+            ...
 
-    The first parameter to the `group` function specifies the extra indentation
-    of the next line.  In this example the next item will either be not
-    breaked (if the items are short enough) or aligned with the right edge of
-    the opening bracked of `MyList`.
+Depending on the python version you want to support you have two
+possibilities.  The following list shows the python 2.5 version and the
+compatibility one.
 
-    If you want to support python 2.4 and lower you can use this code::
 
-        class MyList(list):
+Here the example implementation of a `_repr_pretty_` method for a list
+subclass for python 2.5 and higher (python 2.5 requires the with statement
+__future__ import)::
 
-            def _repr_pretty_(self, p, cycle):
-                if cycle:
-                    p.text('MyList(...)')
-                else:
-                    p.begin_group(8, 'MyList([')
+    class MyList(list):
+
+        def _repr_pretty_(self, p, cycle):
+            if cycle:
+                p.text('MyList(...)')
+            else:
+                with p.group(8, 'MyList([', '])'):
                     for idx, item in enumerate(self):
                         if idx:
                             p.text(',')
                             p.breakable()
                         p.pretty(item)
-                    p.end_group(8, '])')
 
-    If you just want to indent something you can use the group function
-    without open / close parameters.  Under python 2.5 you can also use this
-    code::
+The `cycle` parameter is `True` if pretty detected a cycle.  You *have* to
+react to that or the result is an infinite loop.  `p.text()` just adds
+non breaking text to the output, `p.breakable()` either adds a whitespace
+or breaks here.  If you pass it an argument it's used instead of the
+default space.  `p.pretty` prettyprints another object using the pretty print
+method.
 
-        with p.indent(2):
-            ...
+The first parameter to the `group` function specifies the extra indentation
+of the next line.  In this example the next item will either be not
+breaked (if the items are short enough) or aligned with the right edge of
+the opening bracked of `MyList`.
 
-    Or under python2.4 you might want to modify ``p.indentation`` by hand but
-    this is rather ugly.
+If you want to support python 2.4 and lower you can use this code::
 
-    :copyright: 2007 by Armin Ronacher.
-                Portions (c) 2009 by Robert Kern.
-    :license: BSD License.
+    class MyList(list):
+
+        def _repr_pretty_(self, p, cycle):
+            if cycle:
+                p.text('MyList(...)')
+            else:
+                p.begin_group(8, 'MyList([')
+                for idx, item in enumerate(self):
+                    if idx:
+                        p.text(',')
+                        p.breakable()
+                    p.pretty(item)
+                p.end_group(8, '])')
+
+If you just want to indent something you can use the group function
+without open / close parameters.  Under python 2.5 you can also use this
+code::
+
+    with p.indent(2):
+        ...
+
+Or under python2.4 you might want to modify ``p.indentation`` by hand but
+this is rather ugly.
+
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.lib.pretty
+   :parts: 3
+
+:copyright: 2007 by Armin Ronacher.
+            Portions (c) 2009 by Robert Kern.
+:license: BSD License.
 """
 from __future__ import with_statement
 from contextlib import contextmanager
@@ -353,8 +355,8 @@ class RepresentationPrinter(PrettyPrinter):
                         # Some objects automatically create any requested
                         # attribute. Try to ignore most of them by checking for
                         # callability.
-                        if '_repr_pretty_' in obj_class.__dict__:
-                            meth = obj_class._repr_pretty_
+                        if '_repr_pretty_' in cls.__dict__:
+                            meth = cls._repr_pretty_
                             if callable(meth):
                                 return meth(obj, self, cycle)
             return _default_pprint(obj, self, cycle)
@@ -510,7 +512,7 @@ def _default_pprint(obj, p, cycle):
 def _seq_pprinter_factory(start, end, basetype):
     """
     Factory that returns a pprint function useful for sequences.  Used by
-    the default pprint for tuples, dicts, lists, sets and frozensets.
+    the default pprint for tuples, dicts, and lists.
     """
     def inner(obj, p, cycle):
         typ = type(obj)
@@ -534,6 +536,40 @@ def _seq_pprinter_factory(start, end, basetype):
     return inner
 
 
+def _set_pprinter_factory(start, end, basetype):
+    """
+    Factory that returns a pprint function useful for sets and frozensets.
+    """
+    def inner(obj, p, cycle):
+        typ = type(obj)
+        if basetype is not None and typ is not basetype and typ.__repr__ != basetype.__repr__:
+            # If the subclass provides its own repr, use it instead.
+            return p.text(typ.__repr__(obj))
+
+        if cycle:
+            return p.text(start + '...' + end)
+        if len(obj) == 0:
+            # Special case.
+            p.text(basetype.__name__ + '()')
+        else:
+            step = len(start)
+            p.begin_group(step, start)
+            # Like dictionary keys, we will try to sort the items.
+            items = list(obj)
+            try:
+                items.sort()
+            except Exception:
+                # Sometimes the items don't sort.
+                pass
+            for idx, x in enumerate(items):
+                if idx:
+                    p.text(',')
+                    p.breakable()
+                p.pretty(x)
+            p.end_group(step, end)
+    return inner
+
+
 def _dict_pprinter_factory(start, end, basetype=None):
     """
     Factory that returns a pprint function used by the default pprint of
@@ -551,7 +587,7 @@ def _dict_pprinter_factory(start, end, basetype=None):
         keys = obj.keys()
         try:
             keys.sort()
-        except Exception, e:
+        except Exception as e:
             # Sometimes the keys don't sort.
             pass
         for idx, key in enumerate(keys):
@@ -602,10 +638,10 @@ def _re_pattern_pprint(obj, p, cycle):
 
 def _type_pprint(obj, p, cycle):
     """The pprint for classes and types."""
-    try:
-        mod = obj.__module__
-    except AttributeError:
-        # Heap allocated types might not have the module attribute.
+    mod = getattr(obj, '__module__', None)
+    if mod is None:
+        # Heap allocated types might not have the module attribute,
+        # and others may set it to None.
         return p.text(obj.__name__)
 
     if mod in ('__builtin__', 'exceptions'):
@@ -666,8 +702,8 @@ _type_pprinters = {
     list:                       _seq_pprinter_factory('[', ']', list),
     dict:                       _dict_pprinter_factory('{', '}', dict),
     
-    set:                        _seq_pprinter_factory('set([', '])', set),
-    frozenset:                  _seq_pprinter_factory('frozenset([', '])', frozenset),
+    set:                        _set_pprinter_factory('{', '}', set),
+    frozenset:                  _set_pprinter_factory('frozenset({', '})', frozenset),
     super:                      _super_pprint,
     _re_pattern_type:           _re_pattern_pprint,
     type:                       _type_pprint,

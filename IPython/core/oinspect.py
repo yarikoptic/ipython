@@ -13,17 +13,17 @@ reference the name under which an object is being read.
 #  Distributed under the terms of the BSD License.  The full license is in
 #  the file COPYING, distributed as part of this software.
 #*****************************************************************************
+from __future__ import print_function
 
 __all__ = ['Inspector','InspectColors']
 
 # stdlib modules
-import __builtin__
 import inspect
 import linecache
 import os
-import sys
 import types
-from collections import namedtuple
+import io as stdlib_io
+
 try:
     from itertools import izip_longest
 except ImportError:
@@ -34,10 +34,12 @@ from IPython.core import page
 from IPython.testing.skipdoctest import skip_doctest_py3
 from IPython.utils import PyColorize
 from IPython.utils import io
+from IPython.utils import openpy
 from IPython.utils import py3compat
 from IPython.utils.text import indent
 from IPython.utils.wildcard import list_namespace
 from IPython.utils.coloransi import *
+from IPython.utils.py3compat import cast_unicode
 
 #****************************************************************************
 # Builtin color schemes
@@ -89,6 +91,29 @@ def object_info(**kw):
     return infodict
 
 
+def get_encoding(obj):
+    """Get encoding for python source file defining obj
+
+    Returns None if obj is not defined in a sourcefile.
+    """
+    ofile = find_file(obj)
+    # run contents of file through pager starting at line where the object
+    # is defined, as long as the file isn't binary and is actually on the
+    # filesystem.
+    if ofile is None:
+        return None
+    elif ofile.endswith(('.so', '.dll', '.pyd')):
+        return None
+    elif not os.path.isfile(ofile):
+        return None
+    else:
+        # Print only text files, not extension binaries.  Note that
+        # getsourcelines returns lineno with 1-offset and page() uses
+        # 0-offset, so we must adjust.
+        buffer = stdlib_io.open(ofile, 'rb')   # Tweaked to use io.open for Python 2
+        encoding, lines = openpy.detect_encoding(buffer.readline)
+        return encoding
+
 def getdoc(obj):
     """Stable wrapper around inspect.getdoc.
 
@@ -108,10 +133,13 @@ def getdoc(obj):
             return inspect.cleandoc(ds)
     
     try:
-        return inspect.getdoc(obj)
+        docstr = inspect.getdoc(obj)
+        encoding = get_encoding(obj)
+        return py3compat.cast_unicode(docstr, encoding=encoding)
     except Exception:
         # Harden against an inspect failure, which can occur with
         # SWIG-wrapped extensions.
+        raise
         return None
 
 
@@ -142,7 +170,8 @@ def getsource(obj,is_binary=False):
         except TypeError:
             if hasattr(obj,'__class__'):
                 src = inspect.getsource(obj.__class__)
-        return src
+        encoding = get_encoding(obj)
+        return cast_unicode(src, encoding=encoding)
 
 def getargspec(obj):
     """Get the names and default values of a function's arguments.
@@ -229,6 +258,16 @@ def call_tip(oinfo, format_call=True):
 
     return call_line, doc
 
+def safe_hasattr(obj, attr):
+    """In recent versions of Python, hasattr() only catches AttributeError.
+    This catches all errors.
+    """
+    try:
+        getattr(obj, attr)
+        return True
+    except:
+        return False
+
 
 def find_file(obj):
     """Find the absolute path to the file where an object was defined.
@@ -247,7 +286,7 @@ def find_file(obj):
       The absolute path to the file where the object was defined.
     """
     # get source if obj was decorated with @decorator
-    if hasattr(obj, '__wrapped__'):
+    if safe_hasattr(obj, '__wrapped__'):
         obj = obj.__wrapped__
 
     fname = None
@@ -264,7 +303,7 @@ def find_file(obj):
                 pass
     except:
         pass
-    return fname
+    return cast_unicode(fname)
 
 
 def find_source_lines(obj):
@@ -284,7 +323,7 @@ def find_source_lines(obj):
       The line number where the object definition starts.
     """
     # get source if obj was decorated with @decorator
-    if hasattr(obj, '__wrapped__'):
+    if safe_hasattr(obj, '__wrapped__'):
         obj = obj.__wrapped__
     
     try:
@@ -294,6 +333,8 @@ def find_source_lines(obj):
             # For instances, try the class object like getsource() does
             if hasattr(obj, '__class__'):
                 lineno = inspect.getsourcelines(obj.__class__)[1]
+            else:
+                lineno = None
     except:
         return None
 
@@ -312,15 +353,14 @@ class Inspector:
         self.set_active_scheme(scheme)
 
     def _getdef(self,obj,oname=''):
-        """Return the definition header for any callable object.
+        """Return the call signature for any callable object.
 
         If any exception is generated, None is returned instead and the
         exception is suppressed."""
 
         try:
-            # We need a plain string here, NOT unicode!
             hdef = oname + inspect.formatargspec(*getargspec(obj))
-            return py3compat.unicode_to_str(hdef, 'ascii')
+            return cast_unicode(hdef)
         except:
             return None
 
@@ -335,19 +375,19 @@ class Inspector:
 
     def noinfo(self, msg, oname):
         """Generic message when no information is found."""
-        print 'No %s found' % msg,
+        print('No %s found' % msg, end=' ')
         if oname:
-            print 'for %s' % oname
+            print('for %s' % oname)
         else:
-            print
+            print()
 
     def pdef(self, obj, oname=''):
-        """Print the definition header for any callable object.
+        """Print the call signature for any callable object.
 
         If the object is a class, print the constructor information."""
 
         if not callable(obj):
-            print 'Object is not callable.'
+            print('Object is not callable.')
             return
 
         header = ''
@@ -362,7 +402,7 @@ class Inspector:
         if output is None:
             self.noinfo('definition header',oname)
         else:
-            print >>io.stdout, header,self.format(output),
+            print(header,self.format(output), end=' ', file=io.stdout)
 
     # In Python 3, all classes are new-style, so they all have __init__.
     @skip_doctest_py3
@@ -434,7 +474,7 @@ class Inspector:
         except:
             self.noinfo('source',oname)
         else:
-            page.page(self.format(py3compat.unicode_to_str(src)))
+            page.page(self.format(src))
 
     def pfile(self, obj, oname=''):
         """Show the whole file where an object was defined."""
@@ -449,14 +489,14 @@ class Inspector:
         # is defined, as long as the file isn't binary and is actually on the
         # filesystem.
         if ofile.endswith(('.so', '.dll', '.pyd')):
-            print 'File %r is binary, not printing.' % ofile
+            print('File %r is binary, not printing.' % ofile)
         elif not os.path.isfile(ofile):
-            print 'File %r does not exist, not printing.' % ofile
+            print('File %r does not exist, not printing.' % ofile)
         else:
             # Print only text files, not extension binaries.  Note that
             # getsourcelines returns lineno with 1-offset and page() uses
             # 0-offset, so we must adjust.
-            page.page(self.format(open(ofile).read()), lineno-1)
+            page.page(self.format(openpy.read_py_file(ofile, skip_encoding_cookie=False)), lineno - 1)
 
     def _format_fields(self, fields, title_width=12):
         """Formats a list of fields for display.
@@ -475,7 +515,7 @@ class Inspector:
                 title = header(title + ":") + "\n"
             else:
                 title = header((title+":").ljust(title_width))
-            out.append(title + content)
+            out.append(cast_unicode(title) + cast_unicode(content))
         return "\n".join(out)
 
     # The fields to be displayed by pinfo: (fancy_name, key_in_info_dict)
@@ -535,7 +575,8 @@ class Inspector:
         # Source or docstring, depending on detail level and whether
         # source found.
         if detail_level > 0 and info['source'] is not None:
-            displayfields.append(("Source", self.format(py3compat.cast_bytes_py2(info['source']))))
+            displayfields.append(("Source", 
+                                  self.format(cast_unicode(info['source']))))
         elif info['docstring'] is not None:
             displayfields.append(("Docstring", info["docstring"]))
 
@@ -745,7 +786,7 @@ class Inspector:
                 out['init_docstring'] = init_ds
 
             # Call form docstring for callable instances
-            if hasattr(obj, '__call__'):
+            if safe_hasattr(obj, '__call__'):
                 call_def = self._getdef(obj.__call__, oname)
                 if call_def is not None:
                     out['call_def'] = self.format(call_def)

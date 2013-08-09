@@ -26,14 +26,18 @@ def setup():
 def test_cython_inline():
     ip.ex('a=10; b=20')
     result = ip.run_cell_magic('cython_inline','','return a+b')
-    nt.assert_equals(result, 30)
+    nt.assert_equal(result, 30)
 
 
+@dec.skip_win32
 def test_cython_pyximport():
     module_name = '_test_cython_pyximport'
     ip.run_cell_magic('cython_pyximport', module_name, code)
     ip.ex('g = f(10)')
-    nt.assert_equals(ip.user_ns['g'], 20.0)
+    nt.assert_equal(ip.user_ns['g'], 20.0)
+    ip.run_cell_magic('cython_pyximport', module_name, code)
+    ip.ex('h = f(-10)')
+    nt.assert_equal(ip.user_ns['h'], -20.0)
     try:
         os.remove(module_name+'.pyx')
     except OSError:
@@ -43,7 +47,7 @@ def test_cython_pyximport():
 def test_cython():
     ip.run_cell_magic('cython', '', code)
     ip.ex('g = f(10)')
-    nt.assert_equals(ip.user_ns['g'], 20.0)
+    nt.assert_equal(ip.user_ns['g'], 20.0)
 
 
 @dec.skip_win32
@@ -54,5 +58,5 @@ x = sin(0.0)
     """)
     ip.user_ns['x'] = 1
     ip.run_cell_magic('cython', '-l m', code)
-    nt.assert_equals(ip.user_ns['x'], 0)
+    nt.assert_equal(ip.user_ns['x'], 0)
     

@@ -332,10 +332,10 @@ def _paramiko_tunnel(lport, rport, server, remoteip, keyfile=None, password=None
     except Exception as e:
         print ('*** Failed to connect to %s:%d: %r' % (server, port, e))
         sys.exit(1)
-
+    
     # Don't let SIGINT kill the tunnel subprocess
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-
+    
     try:
         forward_tunnel(lport, remoteip, rport, client.get_transport())
     except KeyboardInterrupt:

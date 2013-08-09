@@ -9,7 +9,7 @@ Authors
 """
 
 #-----------------------------------------------------------------------------
-#  Copyright (C) 2009-2011  The IPython Development Team
+#  Copyright (C) 2009  The IPython Development Team
 #
 #  Distributed under the terms of the BSD License.  The full license is in
 #  the file COPYING, distributed as part of this software.
@@ -22,6 +22,7 @@ Authors
 import sys
 from io import BytesIO
 
+from IPython.core.display import _pngxy
 from IPython.utils.decorators import flag_calls
 
 # If user specifies a GUI, that dictates the backend, otherwise we read the
@@ -32,13 +33,15 @@ backends = {'tk': 'TkAgg',
             'qt': 'Qt4Agg', # qt3 not supported
             'qt4': 'Qt4Agg',
             'osx': 'MacOSX',
-            'inline' : 'module://IPython.zmq.pylab.backend_inline'}
+            'inline' : 'module://IPython.kernel.zmq.pylab.backend_inline'}
 
 # We also need a reverse backends2guis mapping that will properly choose which
 # GUI support to activate based on the desired matplotlib backend.  For the
 # most part it's just a reverse of the above dict, but we also need to add a
 # few others that map to the same GUI manually:
 backend2gui = dict(zip(backends.values(), backends.keys()))
+# Our tests expect backend2gui to just return 'qt'
+backend2gui['Qt4Agg'] = 'qt'
 # In the reverse mapping, there are a few extra valid matplotlib backends that
 # map to the same GUI support
 backend2gui['GTK'] = backend2gui['GTKCairo'] = 'gtk'
@@ -90,6 +93,7 @@ def figsize(sizex, sizey):
 
 def print_figure(fig, fmt='png'):
     """Convert a figure to svg or png for inline display."""
+    from matplotlib import rcParams
     # When there's an empty figure, we shouldn't return anything, otherwise we
     # get big blank areas in the qt console.
     if not fig.axes and not fig.lines:
@@ -97,17 +101,22 @@ def print_figure(fig, fmt='png'):
 
     fc = fig.get_facecolor()
     ec = fig.get_edgecolor()
-    fig.set_facecolor('white')
-    fig.set_edgecolor('white')
-    try:
-        bytes_io = BytesIO()
-        fig.canvas.print_figure(bytes_io, format=fmt, bbox_inches='tight')
-        data = bytes_io.getvalue()
-    finally:
-        fig.set_facecolor(fc)
-        fig.set_edgecolor(ec)
+    bytes_io = BytesIO()
+    dpi = rcParams['savefig.dpi']
+    if fmt == 'retina':
+        dpi = dpi * 2
+        fmt = 'png'
+    fig.canvas.print_figure(bytes_io, format=fmt, bbox_inches='tight',
+                            facecolor=fc, edgecolor=ec, dpi=dpi)
+    data = bytes_io.getvalue()
     return data
-
+    
+def retina_figure(fig):
+    """format a figure as a pixel-doubled (retina) PNG"""
+    pngdata = print_figure(fig, fmt='retina')
+    w, h = _pngxy(pngdata)
+    metadata = dict(width=w//2, height=h//2)
+    return pngdata, metadata
 
 # We need a little factory function here to create the closure where
 # safe_execfile can live.
@@ -152,24 +161,27 @@ def mpl_runner(safe_execfile):
 
 
 def select_figure_format(shell, fmt):
-    """Select figure format for inline backend, either 'png' or 'svg'.
+    """Select figure format for inline backend, can be 'png', 'retina', or 'svg'.
 
     Using this method ensures only one figure format is active at a time.
     """
     from matplotlib.figure import Figure
-    from IPython.zmq.pylab import backend_inline
+    from IPython.kernel.zmq.pylab import backend_inline
 
     svg_formatter = shell.display_formatter.formatters['image/svg+xml']
     png_formatter = shell.display_formatter.formatters['image/png']
 
-    if fmt=='png':
+    if fmt == 'png':
         svg_formatter.type_printers.pop(Figure, None)
         png_formatter.for_type(Figure, lambda fig: print_figure(fig, 'png'))
-    elif fmt=='svg':
+    elif fmt in ('png2x', 'retina'):
+        svg_formatter.type_printers.pop(Figure, None)
+        png_formatter.for_type(Figure, retina_figure)
+    elif fmt == 'svg':
         png_formatter.type_printers.pop(Figure, None)
         svg_formatter.for_type(Figure, lambda fig: print_figure(fig, 'svg'))
     else:
-        raise ValueError("supported formats are: 'png', 'svg', not %r"%fmt)
+        raise ValueError("supported formats are: 'png', 'retina', 'svg', not %r" % fmt)
 
     # set the format to be used in the backend()
     backend_inline._figure_format = fmt
@@ -179,18 +191,21 @@ def select_figure_format(shell, fmt):
 #-----------------------------------------------------------------------------
 
 
-def find_gui_and_backend(gui=None):
+def find_gui_and_backend(gui=None, gui_select=None):
     """Given a gui string return the gui and mpl backend.
 
     Parameters
     ----------
     gui : str
         Can be one of ('tk','gtk','wx','qt','qt4','inline').
+    gui_select : str
+        Can be one of ('tk','gtk','wx','qt','qt4','inline').
+        This is any gui already selected by the shell.
 
     Returns
     -------
     A tuple of (gui, backend) where backend is one of ('TkAgg','GTKAgg',
-    'WXAgg','Qt4Agg','module://IPython.zmq.pylab.backend_inline').
+    'WXAgg','Qt4Agg','module://IPython.kernel.zmq.pylab.backend_inline').
     """
 
     import matplotlib
@@ -203,6 +218,13 @@ def find_gui_and_backend(gui=None):
         # In this case, we need to find what the appropriate gui selection call
         # should be for IPython, so we can activate inputhook accordingly
         gui = backend2gui.get(backend, None)
+
+        # If we have already had a gui active, we need it and inline are the
+        # ones allowed.
+        if gui_select and gui != gui_select:
+            gui = gui_select
+            backend = backends[gui]
+
     return gui, backend
 
 
@@ -210,22 +232,19 @@ def activate_matplotlib(backend):
     """Activate the given backend and set interactive to True."""
 
     import matplotlib
-    if backend.startswith('module://'):
-        # Work around bug in matplotlib: matplotlib.use converts the
-        # backend_id to lowercase even if a module name is specified!
-        matplotlib.rcParams['backend'] = backend
-    else:
-        matplotlib.use(backend)
     matplotlib.interactive(True)
+    
+    # Matplotlib had a bug where even switch_backend could not force
+    # the rcParam to update. This needs to be set *before* the module
+    # magic of switch_backend().
+    matplotlib.rcParams['backend'] = backend
+
+    import matplotlib.pyplot
+    matplotlib.pyplot.switch_backend(backend)
 
     # This must be imported last in the matplotlib series, after
     # backend/interactivity choices have been made
     import matplotlib.pylab as pylab
-
-    # XXX For now leave this commented out, but depending on discussions with
-    # mpl-dev, we may be able to allow interactive switching...
-    #import matplotlib.pyplot
-    #matplotlib.pyplot.switch_backend(backend)
 
     pylab.show._needmain = False
     # We need to detect at runtime whether show() is called by the user.
@@ -234,7 +253,13 @@ def activate_matplotlib(backend):
 
 
 def import_pylab(user_ns, import_all=True):
-    """Import the standard pylab symbols into user_ns."""
+    """Populate the namespace with pylab-related values.
+    
+    Imports matplotlib, pylab, numpy, and everything from pylab and numpy.
+    
+    Also imports a few names from IPython (figsize, display, getfigs)
+    
+    """
 
     # Import numpy as np/pyplot as plt are conventions we're trying to
     # somewhat standardize on.  Making them available to users by default
@@ -246,14 +271,21 @@ def import_pylab(user_ns, import_all=True):
           "plt = pyplot\n"
           )
     exec s in user_ns
-
+    
     if import_all:
         s = ("from matplotlib.pylab import *\n"
              "from numpy import *\n")
         exec s in user_ns
+    
+    # IPython symbols to add
+    user_ns['figsize'] = figsize
+    from IPython.core.display import display
+    # Add display and getfigs to the user's namespace
+    user_ns['display'] = display
+    user_ns['getfigs'] = getfigs
 
 
-def configure_inline_support(shell, backend, user_ns=None):
+def configure_inline_support(shell, backend):
     """Configure an IPython shell object for matplotlib use.
 
     Parameters
@@ -261,10 +293,6 @@ def configure_inline_support(shell, backend, user_ns=None):
     shell : InteractiveShell instance
 
     backend : matplotlib backend
-
-    user_ns : dict
-      A namespace where all configured variables will be placed.  If not given,
-      the `user_ns` attribute of the shell object is used.
     """
     # If using our svg payload backend, register the post-execution
     # function that will pick up the results for display.  This can only be
@@ -274,69 +302,34 @@ def configure_inline_support(shell, backend, user_ns=None):
     # continuing (such as in terminal-only shells in environments without
     # zeromq available).
     try:
-        from IPython.zmq.pylab.backend_inline import InlineBackend
+        from IPython.kernel.zmq.pylab.backend_inline import InlineBackend
     except ImportError:
         return
+    from matplotlib import pyplot
 
-    user_ns = shell.user_ns if user_ns is None else user_ns
-    
-    cfg = InlineBackend.instance(config=shell.config)
+    cfg = InlineBackend.instance(parent=shell)
     cfg.shell = shell
     if cfg not in shell.configurables:
         shell.configurables.append(cfg)
 
     if backend == backends['inline']:
-        from IPython.zmq.pylab.backend_inline import flush_figures
-        from matplotlib import pyplot
+        from IPython.kernel.zmq.pylab.backend_inline import flush_figures
         shell.register_post_execute(flush_figures)
+
+        # Save rcParams that will be overwrittern
+        shell._saved_rcParams = dict()
+        for k in cfg.rc:
+            shell._saved_rcParams[k] = pyplot.rcParams[k]
         # load inline_rc
         pyplot.rcParams.update(cfg.rc)
-        # Add 'figsize' to pyplot and to the user's namespace
-        user_ns['figsize'] = pyplot.figsize = figsize
+    else:
+        from IPython.kernel.zmq.pylab.backend_inline import flush_figures
+        if flush_figures in shell._post_execute:
+            shell._post_execute.pop(flush_figures)
+        if hasattr(shell, '_saved_rcParams'):
+            pyplot.rcParams.update(shell._saved_rcParams)
+            del shell._saved_rcParams
 
     # Setup the default figure format
-    fmt = cfg.figure_format
-    select_figure_format(shell, fmt)
-
-    # The old pastefig function has been replaced by display
-    from IPython.core.display import display
-    # Add display and getfigs to the user's namespace
-    user_ns['display'] = display
-    user_ns['getfigs'] = getfigs
-
-
-def pylab_activate(user_ns, gui=None, import_all=True, shell=None):
-    """Activate pylab mode in the user's namespace.
-
-    Loads and initializes numpy, matplotlib and friends for interactive use.
-
-    Parameters
-    ----------
-    user_ns : dict
-      Namespace where the imports will occur.
-
-    gui : optional, string
-      A valid gui name following the conventions of the %gui magic.
-
-    import_all : optional, boolean
-      If true, an 'import *' is done from numpy and pylab.
-
-    Returns
-    -------
-    The actual gui used (if not given as input, it was obtained from matplotlib
-    itself, and will be needed next to configure IPython's gui integration.
-    """
-    gui, backend = find_gui_and_backend(gui)
-    activate_matplotlib(backend)
-    import_pylab(user_ns, import_all)
-    if shell is not None:
-        configure_inline_support(shell, backend, user_ns)
-        
-    print """
-Welcome to pylab, a matplotlib-based Python environment [backend: %s].
-For more information, type 'help(pylab)'.""" % backend
-    # flush stdout, just to be safe
-    sys.stdout.flush()
-    
-    return gui
+    select_figure_format(shell, cfg.figure_format)
 

@@ -36,17 +36,18 @@ from IPython.parallel.apps.baseapp import (
     base_flags,
     catch_config_error,
 )
-from IPython.zmq.log import EnginePUBHandler
-from IPython.zmq.ipkernel import Kernel, IPKernelApp
-from IPython.zmq.session import (
+from IPython.kernel.zmq.log import EnginePUBHandler
+from IPython.kernel.zmq.ipkernel import Kernel
+from IPython.kernel.zmq.kernelapp import IPKernelApp
+from IPython.kernel.zmq.session import (
     Session, session_aliases, session_flags
 )
-from IPython.zmq.zmqshell import ZMQInteractiveShell
+from IPython.kernel.zmq.zmqshell import ZMQInteractiveShell
 
 from IPython.config.configurable import Configurable
 
 from IPython.parallel.engine.engine import EngineFactory
-from IPython.parallel.util import disambiguate_url
+from IPython.parallel.util import disambiguate_ip_address
 
 from IPython.utils.importstring import import_item
 from IPython.utils.py3compat import cast_bytes
@@ -56,9 +57,6 @@ from IPython.utils.traitlets import Bool, Unicode, Dict, List, Float, Instance
 #-----------------------------------------------------------------------------
 # Module level variables
 #-----------------------------------------------------------------------------
-
-#: The default config file name for this application
-default_config_file_name = u'ipengine_config.py'
 
 _description = """Start an IPython engine for parallel computing.
 
@@ -143,7 +141,6 @@ class IPEngineApp(BaseParallelApplication):
     name = 'ipengine'
     description = _description
     examples = _examples
-    config_file_name = Unicode(default_config_file_name)
     classes = List([ZMQInteractiveShell, ProfileDir, Session, EngineFactory, Kernel, MPI])
 
     startup_script = Unicode(u'', config=True,
@@ -212,24 +209,37 @@ class IPEngineApp(BaseParallelApplication):
         with open(self.url_file) as f:
             d = json.loads(f.read())
         
-        if 'exec_key' in d:
-            config.Session.key = cast_bytes(d['exec_key'])
-        
+        # allow hand-override of location for disambiguation
+        # and ssh-server
         try:
             config.EngineFactory.location
         except AttributeError:
             config.EngineFactory.location = d['location']
         
-        d['url'] = disambiguate_url(d['url'], config.EngineFactory.location)
-        try:
-            config.EngineFactory.url
-        except AttributeError:
-            config.EngineFactory.url = d['url']
-        
         try:
             config.EngineFactory.sshserver
         except AttributeError:
-            config.EngineFactory.sshserver = d['ssh']
+            config.EngineFactory.sshserver = d.get('ssh')
+        
+        location = config.EngineFactory.location
+        
+        proto, ip = d['interface'].split('://')
+        ip = disambiguate_ip_address(ip, location)
+        d['interface'] = '%s://%s' % (proto, ip)
+        
+        # DO NOT allow override of basic URLs, serialization, or key
+        # JSON file takes top priority there
+        config.Session.key = cast_bytes(d['key'])
+        config.Session.signature_scheme = d['signature_scheme']
+        
+        config.EngineFactory.url = d['interface'] + ':%i' % d['registration']
+        
+        config.Session.packer = d['pack']
+        config.Session.unpacker = d['unpack']
+        
+        self.log.debug("Config changed:")
+        self.log.debug("%r", config)
+        self.connection_info = d
     
     def bind_kernel(self, **kwargs):
         """Promote engine to listening kernel, accessible to frontends."""
@@ -328,7 +338,9 @@ class IPEngineApp(BaseParallelApplication):
         # shell_class = import_item(self.master_config.Global.shell_class)
         # print self.config
         try:
-            self.engine = EngineFactory(config=config, log=self.log)
+            self.engine = EngineFactory(config=config, log=self.log,
+                            connection_info=self.connection_info,
+                        )
         except:
             self.log.error("Couldn't start the Engine", exc_info=True)
             self.exit(1)
@@ -345,7 +357,7 @@ class IPEngineApp(BaseParallelApplication):
     
     def init_mpi(self):
         global mpi
-        self.mpi = MPI(config=self.config)
+        self.mpi = MPI(parent=self)
 
         mpi_import_statement = self.mpi.init_script
         if mpi_import_statement:
@@ -373,11 +385,7 @@ class IPEngineApp(BaseParallelApplication):
             self.log.critical("Engine Interrupted, shutting down...\n")
 
 
-def launch_new_instance():
-    """Create and run the IPython engine"""
-    app = IPEngineApp.instance()
-    app.initialize()
-    app.start()
+launch_new_instance = IPEngineApp.launch_instance
 
 
 if __name__ == '__main__':

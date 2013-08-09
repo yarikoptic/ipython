@@ -20,8 +20,6 @@ import pprint
 import sys
 import subprocess
 
-from ConfigParser import ConfigParser
-
 from IPython.core import release
 from IPython.utils import py3compat, _sysinfo, encoding
 
@@ -84,6 +82,7 @@ def pkg_info(pkg_path):
     return dict(
         ipython_version=release.version,
         ipython_path=pkg_path,
+        codename=release.codename,
         commit_source=src,
         commit_hash=hsh,
         sys_version=sys.version,

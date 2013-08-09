@@ -31,6 +31,7 @@ from IPython.config.configurable import Configurable
 from IPython.config.loader import Config
 from IPython.core import pylabtools
 from IPython.utils import py3compat
+from IPython.utils.contexts import preserve_keys
 from IPython.utils.path import filefind
 from IPython.utils.traitlets import (
     Unicode, Instance, List, Bool, CaselessStrEnum
@@ -39,6 +40,9 @@ from IPython.utils.traitlets import (
 #-----------------------------------------------------------------------------
 # Aliases and Flags
 #-----------------------------------------------------------------------------
+
+backend_keys = sorted(pylabtools.backends.keys())
+backend_keys.insert(0, 'auto')
 
 shell_flags = {}
 
@@ -65,7 +69,7 @@ shell_flags.update(dict(
 ))
 addflag('pprint', 'PlainTextFormatter.pprint',
     "Enable auto pretty printing of results.",
-    "Disable auto auto pretty printing of results."
+    "Disable auto pretty printing of results."
 )
 addflag('color-info', 'InteractiveShell.color_info',
     """IPython can display information about objects via a set of func-
@@ -102,6 +106,11 @@ shell_flags['pylab'] = (
     """Pre-load matplotlib and numpy for interactive use with
     the default matplotlib backend."""
 )
+shell_flags['matplotlib'] = (
+    {'InteractiveShellApp' : {'matplotlib' : 'auto'}},
+    """Configure matplotlib for interactive use with
+    the default matplotlib backend."""
+)
 
 # it's possible we don't want short aliases for *all* of these:
 shell_aliases = dict(
@@ -114,6 +123,7 @@ shell_aliases = dict(
     ext='InteractiveShellApp.extra_extension',
     gui='InteractiveShellApp.gui',
     pylab='InteractiveShellApp.pylab',
+    matplotlib='InteractiveShellApp.matplotlib',
 )
 shell_aliases['cache-size'] = 'InteractiveShell.cache_size'
 
@@ -168,15 +178,23 @@ class InteractiveShellApp(Configurable):
     gui = CaselessStrEnum(('qt', 'wx', 'gtk', 'glut', 'pyglet', 'osx'), config=True,
         help="Enable GUI event loop integration ('qt', 'wx', 'gtk', 'glut', 'pyglet', 'osx')."
     )
-    pylab = CaselessStrEnum(['tk', 'qt', 'wx', 'gtk', 'osx', 'inline', 'auto'],
+    matplotlib = CaselessStrEnum(backend_keys,
+        config=True,
+        help="""Configure matplotlib for interactive use with
+        the default matplotlib backend."""
+    )
+    pylab = CaselessStrEnum(backend_keys,
         config=True,
         help="""Pre-load matplotlib and numpy for interactive use,
         selecting a particular matplotlib backend and loop integration.
         """
     )
     pylab_import_all = Bool(True, config=True,
-        help="""If true, an 'import *' is done from numpy and pylab,
-        when using pylab"""
+        help="""If true, IPython will populate the user namespace with numpy, pylab, etc.
+        and an 'import *' is done from numpy and pylab, when using pylab mode.
+        
+        When False, pylab mode should not import any names into the user namespace.
+        """
     )
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
 
@@ -190,21 +208,42 @@ class InteractiveShellApp(Configurable):
 
     def init_gui_pylab(self):
         """Enable GUI event loop integration, taking pylab into account."""
-        if self.gui or self.pylab:
-            shell = self.shell
-            try:
-                if self.pylab:
-                    gui, backend = pylabtools.find_gui_and_backend(self.pylab)
-                    self.log.info("Enabling GUI event loop integration, "
-                              "toolkit=%s, pylab=%s" % (gui, self.pylab))
-                    shell.enable_pylab(gui, import_all=self.pylab_import_all)
-                else:
-                    self.log.info("Enabling GUI event loop integration, "
-                                  "toolkit=%s" % self.gui)
-                    shell.enable_gui(self.gui)
-            except Exception:
-                self.log.warn("GUI event loop or pylab initialization failed")
-                self.shell.showtraceback()
+        enable = False
+        shell = self.shell
+        if self.pylab:
+            enable = shell.enable_pylab
+            key = self.pylab
+        elif self.matplotlib:
+            enable = shell.enable_matplotlib
+            key = self.matplotlib
+        elif self.gui:
+            enable = shell.enable_gui
+            key = self.gui
+        
+        if not enable:
+            return
+        
+        try:
+            r = enable(key)
+        except ImportError:
+            self.log.warn("Eventloop or matplotlib integration failed. Is matplotlib installed?")
+            self.shell.showtraceback()
+            return
+        except Exception:
+            self.log.warn("GUI event loop or pylab initialization failed")
+            self.shell.showtraceback()
+            return
+            
+        if isinstance(r, tuple):
+            gui, backend = r[:2]
+            self.log.info("Enabling GUI event loop integration, "
+                      "eventloop=%s, matplotlib=%s", gui, backend)
+            if key == "auto":
+                print ("Using matplotlib backend: %s" % backend)
+        else:
+            gui = r
+            self.log.info("Enabling GUI event loop integration, "
+                      "eventloop=%s", gui)
 
     def init_extensions(self):
         """Load all IPython extensions in IPythonApp.extensions.
@@ -277,27 +316,28 @@ class InteractiveShellApp(Configurable):
             sys.argv = [ py3compat.cast_bytes(a) for a in sys.argv ]
         try:
             if os.path.isfile(full_filename):
-                if full_filename.endswith('.ipy'):
-                    self.log.info("Running file in user namespace: %s" %
-                                  full_filename)
-                    self.shell.safe_execfile_ipy(full_filename)
-                else:
-                    # default to python, even without extension
-                    self.log.info("Running file in user namespace: %s" %
-                                  full_filename)
-                    # Ensure that __file__ is always defined to match Python behavior
+                self.log.info("Running file in user namespace: %s" %
+                              full_filename)
+                # Ensure that __file__ is always defined to match Python
+                # behavior.
+                with preserve_keys(self.shell.user_ns, '__file__'):
                     self.shell.user_ns['__file__'] = fname
-                    try:
-                        self.shell.safe_execfile(full_filename, self.shell.user_ns)
-                    finally:
-                        del self.shell.user_ns['__file__']
+                    if full_filename.endswith('.ipy'):
+                        self.shell.safe_execfile_ipy(full_filename)
+                    else:
+                        # default to python, even without extension
+                        self.shell.safe_execfile(full_filename,
+                                                 self.shell.user_ns)
         finally:
             sys.argv = save_argv
 
     def _run_startup_files(self):
         """Run files from profile startup directory"""
         startup_dir = self.profile_dir.startup_dir
-        startup_files = glob.glob(os.path.join(startup_dir, '*.py'))
+        startup_files = []
+        if os.environ.get('PYTHONSTARTUP', False):
+            startup_files.append(os.environ['PYTHONSTARTUP'])
+        startup_files += glob.glob(os.path.join(startup_dir, '*.py'))
         startup_files += glob.glob(os.path.join(startup_dir, '*.ipy'))
         if not startup_files:
             return

@@ -15,15 +15,15 @@ from __future__ import print_function
 
 # Stdlib
 import io
+import json
 import sys
 from pprint import pformat
 
 # Our own packages
-from IPython.core import magic_arguments
+from IPython.core import magic_arguments, page
 from IPython.core.error import UsageError
 from IPython.core.magic import Magics, magics_class, line_magic, magic_escapes
-from IPython.utils.text import format_screen
-from IPython.core import magic_arguments, page
+from IPython.utils.text import format_screen, dedent, indent
 from IPython.testing.skipdoctest import skip_doctest
 from IPython.utils.ipstruct import Struct
 from IPython.utils.path import unquote_filename
@@ -32,6 +32,55 @@ from IPython.utils.warn import warn, error
 #-----------------------------------------------------------------------------
 # Magics class implementation
 #-----------------------------------------------------------------------------
+
+class MagicsDisplay(object):
+    def __init__(self, magics_manager):
+        self.magics_manager = magics_manager
+    
+    def _lsmagic(self):
+        """The main implementation of the %lsmagic"""
+        mesc = magic_escapes['line']
+        cesc = magic_escapes['cell']
+        mman = self.magics_manager
+        magics = mman.lsmagic()
+        out = ['Available line magics:',
+               mesc + ('  '+mesc).join(sorted(magics['line'])),
+               '',
+               'Available cell magics:',
+               cesc + ('  '+cesc).join(sorted(magics['cell'])),
+               '',
+               mman.auto_status()]
+        return '\n'.join(out)
+
+    def _repr_pretty_(self, p, cycle):
+        p.text(self._lsmagic())
+    
+    def __str__(self):
+        return self._lsmagic()
+    
+    def _jsonable(self):
+        """turn magics dict into jsonable dict of the same structure
+        
+        replaces object instances with their class names as strings
+        """
+        magic_dict = {}
+        mman = self.magics_manager
+        magics = mman.lsmagic()
+        for key, subdict in magics.items():
+            d = {}
+            magic_dict[key] = d
+            for name, obj in subdict.items():
+                try:
+                    classname = obj.im_class.__name__
+                except AttributeError:
+                    classname = 'Other'
+                
+                d[name] = classname
+        return magic_dict
+        
+    def _repr_json_(self):
+        return json.dumps(self._jsonable())
+
 
 @magics_class
 class BasicMagics(Magics):
@@ -65,6 +114,8 @@ class BasicMagics(Magics):
         --------
         ::
           In [1]: %alias_magic t timeit
+          Created `%t` as an alias for `%timeit`.
+          Created `%%t` as an alias for `%%timeit`.
 
           In [2]: %t -n1 pass
           1 loops, best of 3: 954 ns per loop
@@ -77,12 +128,14 @@ class BasicMagics(Magics):
           In [4]: %alias_magic --cell whereami pwd
           UsageError: Cell magic function `%%pwd` not found.
           In [5]: %alias_magic --line whereami pwd
+          Created `%whereami` as an alias for `%pwd`.
 
           In [6]: %whereami
           Out[6]: u'/home/testuser'
         """
         args = magic_arguments.parse_argstring(self.alias_magic, line)
         shell = self.shell
+        mman = self.shell.magics_manager
         escs = ''.join(magic_escapes.values())
 
         target = args.target.lstrip(escs)
@@ -109,37 +162,21 @@ class BasicMagics(Magics):
             args.cell = bool(m_cell)
 
         if args.line:
-            def wrapper(line): return m_line(line)
-            wrapper.__name__ = str(name)
-            wrapper.__doc__ = "Alias for `%s%s`." % \
-                              (magic_escapes['line'], target)
-            shell.register_magic_function(wrapper, 'line', name)
+            mman.register_alias(name, target, 'line')
+            print('Created `%s%s` as an alias for `%s%s`.' % (
+                magic_escapes['line'], name,
+                magic_escapes['line'], target))
 
         if args.cell:
-            def wrapper(line, cell): return m_cell(line, cell)
-            wrapper.__name__ = str(name)
-            wrapper.__doc__ = "Alias for `%s%s`." % \
-                              (magic_escapes['cell'], target)
-            shell.register_magic_function(wrapper, 'cell', name)
-
-    def _lsmagic(self):
-        mesc = magic_escapes['line']
-        cesc = magic_escapes['cell']
-        mman = self.shell.magics_manager
-        magics = mman.lsmagic()
-        out = ['Available line magics:',
-               mesc + ('  '+mesc).join(sorted(magics['line'])),
-               '',
-               'Available cell magics:',
-               cesc + ('  '+cesc).join(sorted(magics['cell'])),
-               '',
-               mman.auto_status()]
-        return '\n'.join(out)
+            mman.register_alias(name, target, 'cell')
+            print('Created `%s%s` as an alias for `%s%s`.' % (
+                magic_escapes['cell'], name,
+                magic_escapes['cell'], target))
 
     @line_magic
     def lsmagic(self, parameter_s=''):
         """List currently available magic functions."""
-        print(self._lsmagic())
+        return MagicsDisplay(self.shell.magics_manager)
 
     def _magic_docs(self, brief=False, rest=False):
         """Return docstrings from magic functions."""
@@ -147,15 +184,17 @@ class BasicMagics(Magics):
         docs = mman.lsmagic_docs(brief, missing='No documentation')
 
         if rest:
-            format_string = '**%s%s**::\n\n\t%s\n\n'
+            format_string = '**%s%s**::\n\n%s\n\n'
         else:
-            format_string = '%s%s:\n\t%s\n'
+            format_string = '%s%s:\n%s\n'
 
         return ''.join(
-            [format_string % (magic_escapes['line'], fname, fndoc)
+            [format_string % (magic_escapes['line'], fname,
+                              indent(dedent(fndoc)))
              for fname, fndoc in sorted(docs['line'].items())]
             +
-            [format_string % (magic_escapes['cell'], fname, fndoc)
+            [format_string % (magic_escapes['cell'], fname,
+                              indent(dedent(fndoc)))
              for fname, fndoc in sorted(docs['cell'].items())]
         )
 
@@ -230,8 +269,8 @@ of any of them, type %magic_name?, e.g. '%cd?'.
 
 Currently the magic system has the following functions:""",
        magic_docs,
-       "Summary of magic functions (from %slsmagic):",
-       self._lsmagic(),
+       "Summary of magic functions (from %slsmagic):" % magic_escapes['line'],
+       str(self.lsmagic()),
        ]
         page.page('\n'.join(out))
 
@@ -423,7 +462,7 @@ Defaulting color scheme to 'NoColor'"""
         save_dstore('rc_separate_out2',shell.separate_out2)
         save_dstore('rc_prompts_pad_left',pm.justify)
         save_dstore('rc_separate_in',shell.separate_in)
-        save_dstore('rc_plain_text_only',disp_formatter.plain_text_only)
+        save_dstore('rc_active_types',disp_formatter.active_types)
         save_dstore('prompt_templates',(pm.in_template, pm.in2_template, pm.out_template))
 
         if mode == False:
@@ -440,7 +479,7 @@ Defaulting color scheme to 'NoColor'"""
             pm.justify = False
 
             ptformatter.pprint = False
-            disp_formatter.plain_text_only = True
+            disp_formatter.active_types = ['text/plain']
 
             shell.magic('xmode Plain')
         else:
@@ -455,7 +494,7 @@ Defaulting color scheme to 'NoColor'"""
             pm.justify = dstore.rc_prompts_pad_left
 
             ptformatter.pprint = dstore.rc_pprint
-            disp_formatter.plain_text_only = dstore.rc_plain_text_only
+            disp_formatter.active_types = dstore.rc_active_types
 
             shell.magic('xmode ' + dstore.xmode)
 
@@ -550,14 +589,13 @@ Defaulting color scheme to 'NoColor'"""
         help='Export IPython history as a notebook. The filename argument '
              'is used to specify the notebook name and format. For example '
              'a filename of notebook.ipynb will result in a notebook name '
-             'of "notebook" and a format of "xml". Likewise using a ".json" '
-             'or ".py" file extension will write the notebook in the json '
-             'or py formats.'
+             'of "notebook" and a format of "json". Likewise using a ".py" '
+             'file extension will write the notebook as a Python script'
     )
     @magic_arguments.argument(
         '-f', '--format',
         help='Convert an existing IPython notebook to a new format. This option '
-             'specifies the new format and can have the values: xml, json, py. '
+             'specifies the new format and can have the values: json, py. '
              'The target filename is chosen automatically based on the new '
              'format. The filename argument gives the name of the source file.'
     )

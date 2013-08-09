@@ -46,13 +46,26 @@ class MyDict(dict):
         p.text("MyDict(...)")
 
 
+class Dummy1(object):
+    def _repr_pretty_(self, p, cycle):
+        p.text("Dummy1(...)")
+
+class Dummy2(Dummy1):
+    _repr_pretty_ = None
+
+class NoModule(object):
+    pass
+
+NoModule.__module__ = None
+
+
 def test_indentation():
     """Test correct indentation in groups"""
     count = 40
     gotoutput = pretty.pretty(MyList(range(count)))
     expectedoutput = "MyList(\n" + ",\n".join("   %d" % i for i in range(count)) + ")"
 
-    nt.assert_equals(gotoutput, expectedoutput)
+    nt.assert_equal(gotoutput, expectedoutput)
 
 
 def test_dispatch():
@@ -63,7 +76,32 @@ def test_dispatch():
     gotoutput = pretty.pretty(MyDict())
     expectedoutput = "MyDict(...)"
 
-    nt.assert_equals(gotoutput, expectedoutput)
+    nt.assert_equal(gotoutput, expectedoutput)
+
+
+def test_callability_checking():
+    """
+    Test that the _repr_pretty_ method is tested for callability and skipped if
+    not.
+    """
+    gotoutput = pretty.pretty(Dummy2())
+    expectedoutput = "Dummy1(...)"
+
+    nt.assert_equal(gotoutput, expectedoutput)
+
+
+def test_sets():
+    """
+    Test that set and frozenset use Python 3 formatting.
+    """
+    objects = [set(), frozenset(), set([1]), frozenset([1]), set([1, 2]),
+        frozenset([1, 2]), set([-1, -2, -3])]
+    expected = ['set()', 'frozenset()', '{1}', 'frozenset({1})', '{1, 2}',
+        'frozenset({1, 2})', '{-3, -2, -1}']
+    for obj, expected_output in zip(objects, expected):
+        got_output = pretty.pretty(obj)
+        yield nt.assert_equal, got_output, expected_output
+
 
 @skip_without('xxlimited')
 def test_pprint_heap_allocated_type():
@@ -73,3 +111,10 @@ def test_pprint_heap_allocated_type():
     import xxlimited
     output = pretty.pretty(xxlimited.Null)
     nt.assert_equal(output, 'xxlimited.Null')
+
+def test_pprint_nomod():
+    """
+    Test that pprint works for classes with no __module__.
+    """
+    output = pretty.pretty(NoModule)
+    nt.assert_equal(output, 'NoModule')
