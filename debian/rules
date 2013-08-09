@@ -35,24 +35,27 @@ override_dh_install:
 		--exclude="IPython/deathrow/" \
 		--exclude="IPython/quarantine/"
 
-	# remove embedded arparse
-	find $(CURDIR)/debian/ipython*/usr/ -name _argparse.py -delete
-
-	# remove embedded configobj
-	find $(CURDIR)/debian/ipython*/usr/ -name _configobj.py -delete
-	find $(CURDIR)/debian/ipython*/usr/ -name _validate.py -delete
-
-	# remove embedded simplegeneric
-	find $(CURDIR)/debian/ipython*/usr/ -name _simplegeneric.py -delete
-
-	# remove embedded decorator
-	find $(CURDIR)/debian/ipython*/usr/ -name _decorator.py -delete
-
-	# remove embedded pexpect
-	find $(CURDIR)/debian/ipython*/usr/ -name _pexpect.py -delete
-
-	# remove embedded pyparsing
-	find $(CURDIR)/debian/ipython*/usr/ -name _pyparsing.py -delete
+	# yoh: For this ad-hoc package which would be available
+	#      across multiple releases of Debian and Ubuntu, forget about
+	#      not carrying external libraries
+	## # remove embedded arparse
+	## find $(CURDIR)/debian/ipython*/usr/ -name _argparse.py -delete
+	## 
+	## # remove embedded configobj
+	## find $(CURDIR)/debian/ipython*/usr/ -name _configobj.py -delete
+	## find $(CURDIR)/debian/ipython*/usr/ -name _validate.py -delete
+	## 
+	## # remove embedded simplegeneric
+	## find $(CURDIR)/debian/ipython*/usr/ -name _simplegeneric.py -delete
+	## 
+	## # remove embedded decorator
+	## find $(CURDIR)/debian/ipython*/usr/ -name _decorator.py -delete
+	## 
+	## # remove embedded pexpect
+	## find $(CURDIR)/debian/ipython*/usr/ -name _pexpect.py -delete
+	## 
+	## # remove embedded pyparsing
+	## find $(CURDIR)/debian/ipython*/usr/ -name _pyparsing.py -delete
 
 	# add wrapper scripts for all python versions
 	set -e ;\
