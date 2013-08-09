@@ -1,4 +1,4 @@
-Source: ipython01x
+Source: ipython1x
 Section: python
 Priority: optional
 Maintainer: Debian Python Modules Team <python-modules-team@lists.alioth.debian.org>
@@ -31,7 +31,7 @@ Vcs-Browser: http://svn.debian.org/viewsvn/python-modules/packages/ipython/trunk
 Standards-Version: 3.9.2
 DM-Upload-Allowed: yes
 
-Package: ipython01x
+Package: ipython1x
 Architecture: all
 Depends: python-argparse,
          python-configobj,
@@ -47,7 +47,7 @@ Recommends: python-tornado (>= 2.1.0~),
             python-matplotlib
 Conflicts: ipython-common, python2.3-ipython, python2.4-ipython
 Replaces: ipython-common, python2.3-ipython, python2.4-ipython
-Suggests: ipython01x-doc,
+Suggests: ipython1x-doc,
           python-gobject,
           python-gtk2,
           python-matplotlib,
@@ -64,42 +64,42 @@ Description: enhanced interactive Python shell
  and is embeddable in other Python programs.
  .
  This is a non-official, custom build of IPython post 0.11 with
- notebooks support.  It provides IPython01X module thus not
+ notebooks support.  It provides IPython1X module thus not
  conflicting with system-wide installed IPython
 
-Package: ipython01x-qtconsole
+Package: ipython1x-qtconsole
 Architecture: all
 Priority: extra
-Depends: ipython01x (>= 0.13.1~git33-gcfc5692-2~),
+Depends: ipython1x (>= 0.13.1~git33-gcfc5692-2~),
          ${misc:Depends},
 Description: enhanced interactive Python shell -- notebook dummy package
- This is a dummy package depending on ipython01x which ships
+ This is a dummy package depending on ipython1x which ships
  qt console functionality inside.  It is made so to stay in line to
  modularization of the official ipython package in Debian.  There is no
  real good reason to install this package.
 
-Package: ipython01x-parallel
+Package: ipython1x-parallel
 Architecture: all
 Priority: extra
-Depends: ipython01x (>= 0.13.1~git33-gcfc5692-2~),
+Depends: ipython1x (>= 0.13.1~git33-gcfc5692-2~),
          ${misc:Depends},
 Section: oldlibs
 Description: enhanced interactive Python shell
  This is a transitional package and can be safely removed
  after the installation is complete.
 
-Package: ipython01x-notebook
+Package: ipython1x-notebook
 Architecture: all
 Priority: extra
-Depends: ipython01x (>= 0.13.1~git33-gcfc5692-2~),
+Depends: ipython1x (>= 0.13.1~git33-gcfc5692-2~),
          ${misc:Depends},
 Description: enhanced interactive Python shell -- notebook dummy package
- This is a dummy package depending on ipython01x which ships
+ This is a dummy package depending on ipython1x which ships
  notebook functionality inside.  It is made so to stay in line to
  modularization of official ipython package in Debian.  There is no
  real good reason to install this package.
 
-Package: ipython01x-doc
+Package: ipython1x-doc
 Section: doc
 Architecture: all
 Depends: libjs-jquery, ${misc:Depends}
@@ -116,5 +116,5 @@ Description: enhanced interactive Python shell
  This package contains the documentation.
  .
  This is a non-official, custom build of IPython post 0.11 with
- workbooks support.  It provides IPython01X module thus not
+ workbooks support.  It provides IPython1X module thus not
  conflicting with system-wide installed IPython

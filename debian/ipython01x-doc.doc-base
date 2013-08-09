@@ -1,4 +1,4 @@
-Document: ipython01x-doc
+Document: ipython1x-doc
 Title: IPython 0.1.X Manual
 Author: IPython developers
 Abstract: This manual describes what ipython is
@@ -6,5 +6,5 @@ Abstract: This manual describes what ipython is
 Section: Programming/Python
 
 Format: HTML
-Index: /usr/share/doc/ipython01x/html/index.html
-Files: /usr/share/doc/ipython01x/html/*
+Index: /usr/share/doc/ipython1x/html/index.html
+Files: /usr/share/doc/ipython1x/html/*

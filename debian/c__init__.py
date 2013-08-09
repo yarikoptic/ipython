@@ -1,10 +1,10 @@
 #!/usr/bin/python
 #emacs: -*- mode: python-mode; py-indent-offset: 4; tab-width: 4; indent-tabs-mode: nil -*- 
 #ex: set sts=4 ts=4 sw=4 noet:
-"""IPython01X -- ugly hack to load custom-installed IPython module
+"""IPython1X -- ugly hack to load custom-installed IPython module
 
 Its job is to augment sys.path and PYTHONPATH so that having imported
-IPython01X, upon 'import IPython' you would be working with a local
+IPython1X, upon 'import IPython' you would be working with a local
 copy of IPython (as opposed to possibly system-wide available,
 distribution-supported ipython)
 
