@@ -115,10 +115,10 @@ override_dh_python2:
 		while read d; do mv $$d $${d%.el}1x.el}; done; }
 	: # binaries
 	{ /usr/bin/find debian/ipy* -path *bin/\* | \
-		grep -v 'bin/ipython1x' | \
+		grep -v '1x[.\d]*$$' | \
 		while read d; do mv $$d $${d}1x; done; }
 	: # Adjust all wrappers to import IPython1X first
-	sed -i -e 's,\(from IPython\..*\),import IPython1X; \1,g' $(CURDIR)/debian/ipy*/usr/bin/*
+	sed -i -e 's,\(from IPython[^1].*\),import IPython1X; \1,g' $(CURDIR)/debian/ipy*/usr/bin/*
 	: # call actual dh_python2
 	dh_python2
 	: # and remove .egg-info since they are anyways somewhat incorrect now and I do not think they are mandatory here fro ipython
