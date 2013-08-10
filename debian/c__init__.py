@@ -29,8 +29,8 @@ _i01path = os.path.dirname(__file__)
 # for processes sharing this Python session
 _i01path in sys.path or sys.path.insert(1, _i01path);
 
-# for newly spawn processes we need to agument PYTHONPATH
+# for newly spawn processes we need to augment PYTHONPATH
 _PYTHONPATH = [_i01path]
 if os.getenv('PYTHONPATH', None):
     _PYTHONPATH.append(os.getenv('PYTHONPATH'))
-os.putenv('PYTHONPATH', ':'.join(_PYTHONPATH))
+os.environ['PYTHONPATH'] = ':'.join(_PYTHONPATH)
