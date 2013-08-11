@@ -1,3 +1,9 @@
+ipython1x (1.0.0-2) neurodebian; urgency=low
+
+  * Fixing missing the submodule
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 10 Aug 2013 23:27:28 -0400
+
 ipython1x (1.0.0-1) neurodebian; urgency=low
 
   * Bleeding edge release.
