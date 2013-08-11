@@ -1,6 +1,7 @@
-ipython1x (1.0.0-2) neurodebian; urgency=low
+ipython1x (1.0.0+1-1) neurodebian; urgency=low
 
-  * Fixing missing the submodule
+  * Rebuilding for source tree also containing previously excluded submodule
+    IPython/html/static/components
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 10 Aug 2013 23:27:28 -0400
 
