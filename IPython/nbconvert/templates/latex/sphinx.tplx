@@ -229,7 +229,7 @@ Note: For best display, use latex syntax highlighting. =))
     in IPYNB file titles) do not make their way into latex.  Sometimes this
     causes latex to barf. =))
     ((*- endif -*))
-    {((( cell.source | markdown2latex )))}
+    {((( cell.source | replace('\n', ' ') | markdown2latex )))}
 ((*- endblock headingcell *))
 
 %==============================================================================
@@ -359,7 +359,7 @@ Note: For best display, use latex syntax highlighting. =))
 ((*- endblock -*))
 
 ((*- block data_jpg -*))
-((( conditionally_center_output(insert_graphics(output.jpg_filename | posix_path)) )))
+((( conditionally_center_output(insert_graphics(output.jpeg_filename | posix_path)) )))
 ((*- endblock -*))
 
 ((*- block data_svg -*))

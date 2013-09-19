@@ -19,6 +19,7 @@ templates.
 import os
 import re
 import textwrap
+from urllib2 import quote
 from xml.etree import ElementTree
 
 from IPython.core.interactiveshell import InteractiveShell
@@ -38,6 +39,7 @@ __all__ = [
     'get_lines',
     'ipython2python',
     'posix_path',
+    'path2url',
 ]
 
 
@@ -80,7 +82,7 @@ def add_anchor(html):
     
     For use in heading cells
     """
-    h = ElementTree.fromstring(py3compat.cast_bytes_py2(html))
+    h = ElementTree.fromstring(py3compat.cast_bytes_py2(html, encoding='utf-8'))
     link = html2text(h).replace(' ', '-')
     h.set('id', link)
     a = ElementTree.Element("a", {"class" : "anchor-link", "href" : "#" + link})
@@ -181,3 +183,8 @@ def posix_path(path):
     if os.path.sep != '/':
         return path.replace(os.path.sep, '/')
     return path
+
+def path2url(path):
+    """Turn a file path into a URL"""
+    parts = path.split(os.path.sep)
+    return '/'.join(quote(part) for part in parts)
