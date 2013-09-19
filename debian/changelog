@@ -1,3 +1,10 @@
+ipython1x (1.1.0+git3-gb8b89ca-1) neurodebian; urgency=low
+
+  * New upstream snapshot from rel-1.1.0-3-gb8b89ca at rel-1.1.0-3-
+    gb8b89ca
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 19 Sep 2013 11:16:53 -0400
+
 ipython1x (1.0.0+1-1) neurodebian; urgency=low
 
   * Rebuilding for source tree also containing previously excluded submodule
