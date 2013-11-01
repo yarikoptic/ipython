@@ -1,9 +1,8 @@
-ipython1x (1.1.0+git3-gb8b89ca-1) neurodebian; urgency=low
+ipython1x (1.1.0+git7-gf5891e9-1) neurodebian; urgency=low
 
-  * New upstream snapshot from rel-1.1.0-3-gb8b89ca at rel-1.1.0-3-
-    gb8b89ca
+  * New upstream snapshot from rel-1.1.0-7-gf5891e9.
 
- -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 19 Sep 2013 11:16:53 -0400
+ -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 01 Nov 2013 15:14:08 -0400
 
 ipython1x (1.0.0+1-1) neurodebian; urgency=low
 
