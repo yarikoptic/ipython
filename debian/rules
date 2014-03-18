@@ -31,7 +31,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 endif
 
 override_dh_install:
-	dh_install -pipython1x \
+	dh_install -pipython2x \
 		--exclude="IPython/deathrow/" \
 		--exclude="IPython/quarantine/"
 
@@ -60,15 +60,15 @@ override_dh_install:
 	# add wrapper scripts for all python versions
 	set -e ;\
 	firstpyver="" ;\
-	mkdir -p $(CURDIR)/debian/ipython1x/usr/share/man/man1/; \
+	mkdir -p $(CURDIR)/debian/ipython2x/usr/share/man/man1/; \
 	for pyvers in $(PYVERS); do \
 	    if [ "$${firstpyver}" = "" ]; then \
-	        install -m 755 debian/ipython1x.sh $(CURDIR)/debian/ipython1x/usr/bin/ipython1x$${pyvers} ;\
+	        install -m 755 debian/ipython2x.sh $(CURDIR)/debian/ipython2x/usr/bin/ipython2x$${pyvers} ;\
 	        firstpyver="$$pyvers" ;\
 	    else \
-	        ln -sf ipython1x$${firstpyver} $(CURDIR)/debian/ipython1x/usr/bin/ipython1x$${pyvers} ;\
+	        ln -sf ipython2x$${firstpyver} $(CURDIR)/debian/ipython2x/usr/bin/ipython2x$${pyvers} ;\
 	    fi ;\
-	    ln -sf ipython1x.1.gz $(CURDIR)/debian/ipython1x/usr/share/man/man1/ipython1x$${pyvers}.1.gz ;\
+	    ln -sf ipython2x.1.gz $(CURDIR)/debian/ipython2x/usr/share/man/man1/ipython2x$${pyvers}.1.gz ;\
 	done
 
 	# change permission on scripts
@@ -76,17 +76,17 @@ override_dh_install:
 
 override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
-	dh_installdocs -pipython1x
-	dh_installdocs -pipython1x-parallel --link-doc=ipython1x
-	dh_installdocs -pipython1x-notebook --link-doc=ipython1x
-	dh_installdocs -pipython1x-qtconsole --link-doc=ipython1x
-	dh_installdocs -pipython1x-doc --link-doc=ipython1x
+	dh_installdocs -pipython2x
+	dh_installdocs -pipython2x-parallel --link-doc=ipython2x
+	dh_installdocs -pipython2x-notebook --link-doc=ipython2x
+	dh_installdocs -pipython2x-qtconsole --link-doc=ipython2x
+	dh_installdocs -pipython2x-doc --link-doc=ipython2x
 endif
 
 override_dh_installexamples:
-	dh_installexamples -pipython1x
+	dh_installexamples -pipython2x
 	# yoh: disabled for now since at this point link is dangling and do not want more mess with renamings
-	# dh_installexamples -pipython1x-parallel
+	# dh_installexamples -pipython2x-parallel
 
 override_dh_python2:
 	: # and here we are
@@ -95,7 +95,7 @@ override_dh_python2:
 		while read d; do \
 			mkdir $${d}1X; \
 			mv $$d $${d}1X; \
-			echo $$d | grep -q 'debian/ipython1x/' && \
+			echo $$d | grep -q 'debian/ipython2x/' && \
 				cp $(CURDIR)/debian/c__init__.py $${d}1X/__init__.py || :; \
 		 done; }
 	: # misc dirs
@@ -107,7 +107,7 @@ override_dh_python2:
 	: # desktop files
 	{ /usr/bin/find debian/ipy* -path *.desktop | \
 		while read d; do \
-			sed -i -e 's,Exec=ipython ,Exec=ipython1x ,g' $$d; \
+			sed -i -e 's,Exec=ipython ,Exec=ipython2x ,g' $$d; \
 			mv $$d $${d%.desktop}1x.desktop; \
 		done; }
 	: # emacs files
@@ -123,12 +123,12 @@ override_dh_python2:
 	: # call actual dh_python2
 	dh_python2
 	: # and remove .egg-info since they are anyways somewhat incorrect now and I do not think they are mandatory here fro ipython
-	find ./debian/ipython1x -iname *.egg-info -delete
+	find ./debian/ipython2x -iname *.egg-info -delete
 
 get-orig-source-git:
 	git fetch origin
 	uver=$$(git describe origin/master | sed -e 's,rel-\([.0-9]*\)-\([0-9]*-g.*\),\1+git\2,g') && \
-	git archive --prefix=ipython1x-$$uver/ --format=tar origin/master \
-	| gzip >| ../tarballs/ipython1x_$$uver.orig.tar.gz && \
+	git archive --prefix=ipython2x-$$uver/ --format=tar origin/master \
+	| gzip >| ../tarballs/ipython2x_$$uver.orig.tar.gz && \
 	dch --noconf --newversion $$uver-1 -D neurodebian --force-distribution "Fresh upstream snapshot" && \
 	git commit -m "Changelog for a new snapshot revision $$uver" debian/changelog
