@@ -1,6 +1,4 @@
 /usr/bin/*
 /usr/lib/python2.*
-/usr/share/doc/ipython/extensions
-docs/emacs/ipython.el		usr/share/emacs/site-lisp
 examples/core/ipython.desktop usr/share/applications/
 examples/core/ipython-qtconsole.desktop usr/share/applications/
