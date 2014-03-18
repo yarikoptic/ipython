@@ -116,6 +116,5 @@ Description: enhanced interactive Python shell
  .
  This package contains the documentation.
  .
- This is a non-official, custom build of IPython post 0.11 with
- workbooks support.  It provides IPython1X module thus not
- conflicting with system-wide installed IPython
+ This is a non-official, custom build of IPython 2.x. It provides
+ IPython2X module thus not conflicting with system-wide installed IPython

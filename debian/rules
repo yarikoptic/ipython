@@ -93,10 +93,10 @@ override_dh_python2:
 	: # The Module
 	{ /usr/bin/find debian/ipy* -name IPython | \
 		while read d; do \
-			mkdir $${d}1X; \
-			mv $$d $${d}1X; \
+			mkdir $${d}2X; \
+			mv $$d $${d}2X; \
 			echo $$d | grep -q 'debian/ipython2x/' && \
-				cp $(CURDIR)/debian/c__init__.py $${d}1X/__init__.py || :; \
+				cp $(CURDIR)/debian/c__init__.py $${d}2X/__init__.py || :; \
 		 done; }
 	: # misc dirs
 	{ /usr/bin/find debian/ipy* -mindepth 2 -name ipython -type d | \
@@ -117,9 +117,9 @@ override_dh_python2:
 	{ /usr/bin/find debian/ipy* -path *bin/\* | \
 		grep -v '1x[.\d]*$$' | \
 		while read d; do mv $$d $${d}1x; done; }
-	: # Adjust all wrappers to import IPython1X first
+	: # Adjust all wrappers to import IPython2X first
 	find $(CURDIR)/debian/ipy*/usr/bin -type f \
-	| xargs sed -i -e 's,\(from IPython[^1].*\),import IPython1X; \1,g'
+	| xargs sed -i -e 's,\(from IPython[^1].*\),import IPython2X; \1,g'
 	: # call actual dh_python2
 	dh_python2
 	: # and remove .egg-info since they are anyways somewhat incorrect now and I do not think they are mandatory here fro ipython
