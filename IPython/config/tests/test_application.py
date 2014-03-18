@@ -1,3 +1,4 @@
+# coding: utf-8
 """
 Tests for IPython.config.application.Application
 
@@ -18,7 +19,10 @@ Authors:
 #-----------------------------------------------------------------------------
 
 import logging
+from io import StringIO
 from unittest import TestCase
+
+import nose.tools as nt
 
 from IPython.config.configurable import Configurable
 from IPython.config.loader import Config
@@ -79,6 +83,16 @@ class MyApp(Application):
 
 
 class TestApplication(TestCase):
+
+    def test_log(self):
+        stream = StringIO()
+        app = MyApp(log_level=logging.INFO)
+        handler = logging.StreamHandler(stream)
+        # trigger reconstruction of the log formatter
+        app.log.handlers = [handler]
+        app.log_format = "%(message)s"
+        app.log.info("hello")
+        nt.assert_in("hello", stream.getvalue())
 
     def test_basic(self):
         app = MyApp()
@@ -172,4 +186,7 @@ class TestApplication(TestCase):
         self.assertEqual(app.bar.b, 5)
         self.assertEqual(app.extra_args, ['extra', '--disable', 'args'])
     
+    def test_unicode_argv(self):
+        app = MyApp()
+        app.parse_command_line(['ünîcødé'])
 

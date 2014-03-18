@@ -89,7 +89,6 @@ def sync_view_results(f, self, *args, **kwargs):
     view = self.view
     if view._in_sync_results:
         return f(self, *args, **kwargs)
-    print 'in sync results', f
     view._in_sync_results = True
     try:
         ret = f(self, *args, **kwargs)
@@ -232,7 +231,8 @@ class ParallelFunction(RemoteFunction):
             for seq in sequences:
                 part = self.mapObject.getPartition(seq, index, nparts, maxlen)
                 args.append(part)
-            if not any(args):
+
+            if sum([len(arg) for arg in args]) == 0:
                 continue
 
             if self._mapping:

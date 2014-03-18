@@ -31,7 +31,7 @@
 .. _graphviz: http://www.graphviz.org
 .. _Sphinx: http://sphinx.pocoo.org
 .. _`Sphinx reST`: http://sphinx.pocoo.org/rest.html
-.. _sampledoc: http://matplotlib.sourceforge.net/sampledoc
+.. _sampledoc: http://matplotlib.org/sampledoc
 .. _reST: http://docutils.sourceforge.net/rst.html
 .. _docutils: http://docutils.sourceforge.net
 .. _lyx: http://www.lyx.org
@@ -84,7 +84,7 @@
 .. _Plotting with Matplotlib: notebook_p3_
 .. _notebook_p3: http://nbviewer.ipython.org/urls/raw.github.com/ipython/ipython/1.x/examples/notebooks/Part%203%20-%20Plotting%20with%20Matplotlib.ipynb
 
-.. _Markdown Cells: notebook_p4
+.. _Markdown Cells: notebook_p4_
 .. _notebook_p4: http://nbviewer.ipython.org/urls/raw.github.com/ipython/ipython/1.x/examples/notebooks/Part%204%20-%20Markdown%20Cells.ipynb
 
 .. _Rich Display System: notebook_p5_

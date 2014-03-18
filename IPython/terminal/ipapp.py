@@ -47,6 +47,7 @@ from IPython.core.magics import ScriptMagics
 from IPython.core.shellapp import (
     InteractiveShellApp, shell_flags, shell_aliases
 )
+from IPython.extensions.storemagic import StoreMagics
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
 from IPython.utils import warn
 from IPython.utils.path import get_ipython_dir, check_for_old_config
@@ -60,7 +61,7 @@ from IPython.utils.traitlets import (
 
 _examples = """
 ipython --matplotlib       # enable matplotlib integration
-ipython --matploltib=qt    # enable matplotlib integration with qt4 backend
+ipython --matplotlib=qt    # enable matplotlib integration with qt4 backend
 
 ipython --log-level=DEBUG  # set logging to DEBUG
 ipython --profile=foo      # start with profile foo
@@ -219,6 +220,7 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
             PlainTextFormatter,
             IPCompleter,
             ScriptMagics,
+            StoreMagics,
         ]
 
     subcommands = Dict(dict(
@@ -334,7 +336,7 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
         # so the banner shows *before* all extension loading stuff.
         self.shell = TerminalInteractiveShell.instance(parent=self,
                         display_banner=False, profile_dir=self.profile_dir,
-                        ipython_dir=self.ipython_dir)
+                        ipython_dir=self.ipython_dir, user_ns=self.user_ns)
         self.shell.configurables.append(self)
 
     def init_banner(self):

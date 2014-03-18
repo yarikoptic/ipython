@@ -17,8 +17,6 @@ process.
 from __future__ import print_function, absolute_import
 
 # Stdlib imports
-# Used to find Sphinx package location
-import sphinx
 import os.path
 
 # Used to set the default date to today's date 
@@ -31,6 +29,7 @@ from pygments.formatters import LatexFormatter
 # Our own imports
 # Configurable traitlets
 from IPython.utils.traitlets import Unicode, Bool
+from IPython.utils import text
 
 # Needed to override transformer
 from .base import (Transformer)
@@ -123,6 +122,8 @@ class SphinxTransformer(Transformer):
             Additional resources used in the conversion process.  Allows
             transformers to pass variables into the Jinja engine.
         """
+        # import sphinx here, so that sphinx is not a dependency when it's not used
+        import sphinx
          
         # TODO: Add versatile method of additional notebook metadata.  Include
         #       handling of multiple files.  For now use a temporay namespace,
@@ -157,7 +158,7 @@ class SphinxTransformer(Transformer):
             if self.publish_date:
                 resources["sphinx"]["date"] = self.publish_date
             elif len(resources['metadata']['modified_date'].strip()) == 0:
-                resources["sphinx"]["date"] = date.today().strftime("%B %-d, %Y")
+                resources["sphinx"]["date"] = date.today().strftime(text.date_format)
             else:
                 resources["sphinx"]["date"] = resources['metadata']['modified_date']
             
@@ -219,7 +220,7 @@ class SphinxTransformer(Transformer):
         if resources['metadata']['modified_date']:
             default_date = resources['metadata']['modified_date']
         else:
-            default_date = date.today().strftime("%B %-d, %Y")
+            default_date = date.today().strftime(text.date_format)
             
         user_date = console.input("Date (deafults to \"" + default_date + "\"): ")
         if len(user_date.strip()) == 0:

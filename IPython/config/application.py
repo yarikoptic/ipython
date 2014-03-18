@@ -115,8 +115,10 @@ class LevelFormatter(logging.Formatter):
             record.highlevel = self.highlevel_format % record.__dict__
         else:
             record.highlevel = ""
-        
-        return super(LevelFormatter, self).format(record)
+        if sys.version_info[:2] > (2,6):
+            return super(LevelFormatter, self).format(record)
+        else:
+            return logging.Formatter.format(self, record)
             
 
 class Application(SingletonConfigurable):
@@ -143,6 +145,9 @@ class Application(SingletonConfigurable):
 
     # The version string of this application.
     version = Unicode(u'0.0')
+    
+    # the argv used to initialize the application
+    argv = List()
 
     # The log level for the application
     log_level = Enum((0,10,20,30,40,50,'DEBUG','INFO','WARN','ERROR','CRITICAL'),
@@ -455,6 +460,7 @@ class Application(SingletonConfigurable):
     def parse_command_line(self, argv=None):
         """Parse the command line arguments."""
         argv = sys.argv[1:] if argv is None else argv
+        self.argv = list(argv)
         
         if argv and argv[0] == 'help':
             # turn `ipython help notebook` into `ipython notebook -h`
