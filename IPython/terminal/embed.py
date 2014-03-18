@@ -23,19 +23,14 @@ Notes
 #-----------------------------------------------------------------------------
 
 from __future__ import with_statement
+from __future__ import print_function
 
 import sys
 import warnings
 
-# We need to use nested to support python 2.6, once we move to >=2.7, we can
-# use the with keyword's new builtin support for nested managers
-try:
-    from contextlib import nested
-except:
-    from IPython.utils.nested_context import nested
-
 from IPython.core import ultratb, compilerop
 from IPython.core.magic import Magics, magics_class, line_magic
+from IPython.core.interactiveshell import DummyMod
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
 from IPython.terminal.ipapp import load_default_config
 
@@ -160,41 +155,36 @@ class InteractiveShellEmbed(TerminalInteractiveShell):
         self.banner2 = self.old_banner2
 
         if self.exit_msg is not None:
-            print self.exit_msg
+            print(self.exit_msg)
 
     def mainloop(self, local_ns=None, module=None, stack_depth=0,
                  display_banner=None, global_ns=None, compile_flags=None):
         """Embeds IPython into a running python program.
 
-        Input:
+        Parameters
+        ----------
 
-          - header: An optional header message can be specified.
+        local_ns, module
+          Working local namespace (a dict) and module (a module or similar
+          object). If given as None, they are automatically taken from the scope
+          where the shell was called, so that program variables become visible.
 
-          - local_ns, module: working local namespace (a dict) and module (a
-          module or similar object). If given as None, they are automatically
-          taken from the scope where the shell was called, so that
-          program variables become visible.
+        stack_depth : int
+          How many levels in the stack to go to looking for namespaces (when
+          local_ns or module is None). This allows an intermediate caller to
+          make sure that this function gets the namespace from the intended
+          level in the stack. By default (0) it will get its locals and globals
+          from the immediate caller.
 
-          - stack_depth: specifies how many levels in the stack to go to
-          looking for namespaces (when local_ns or module is None).  This
-          allows an intermediate caller to make sure that this function gets
-          the namespace from the intended level in the stack.  By default (0)
-          it will get its locals and globals from the immediate caller.
+        compile_flags
+          A bit field identifying the __future__ features
+          that are enabled, as passed to the builtin :func:`compile` function.
+          If given as None, they are automatically taken from the scope where
+          the shell was called.
 
-          - compile_flags: A bit field identifying the __future__ features
-          that are enabled, as passed to the builtin `compile` function. If
-          given as None, they are automatically taken from the scope where the
-          shell was called.
-
-        Warning: it's possible to use this in a program which is being run by
-        IPython itself (via %run), but some funny things will happen (a few
-        globals get overwritten). In the future this will be cleaned up, as
-        there is no fundamental reason why it can't work perfectly."""
+        """
         
         if (global_ns is not None) and (module is None):
-            class DummyMod(object):
-                """A dummy module object for embedded IPython."""
-                pass
             warnings.warn("global_ns is deprecated, use module instead.", DeprecationWarning)
             module = DummyMod()
             module.__dict__ = global_ns
@@ -251,7 +241,7 @@ class InteractiveShellEmbed(TerminalInteractiveShell):
         # actually completes using the frame's locals/globals
         self.set_completer_frame()
 
-        with nested(self.builtin_trap, self.display_trap):
+        with self.builtin_trap, self.display_trap:
             self.interact(display_banner=display_banner)
         
         # now, purge out the local namespace of IPython's hidden variables.

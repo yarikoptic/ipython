@@ -13,6 +13,7 @@ Authors:
 * Fernando Perez
 * Min RK
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008-2011  The IPython Development Team
@@ -25,12 +26,12 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-import datetime
 from copy import deepcopy
 
-from loader import Config
+from .loader import Config, LazyConfigValue
 from IPython.utils.traitlets import HasTraits, Instance
 from IPython.utils.text import indent, wrap_paragraphs
+from IPython.utils.py3compat import iteritems
 
 
 #-----------------------------------------------------------------------------
@@ -53,7 +54,6 @@ class Configurable(HasTraits):
 
     config = Instance(Config, (), {})
     parent = Instance('IPython.config.configurable.Configurable')
-    created = None
 
     def __init__(self, **kwargs):
         """Create a configurable given a config config.
@@ -100,7 +100,6 @@ class Configurable(HasTraits):
         # This should go second so individual keyword arguments override
         # the values in config.
         super(Configurable, self).__init__(**kwargs)
-        self.created = datetime.datetime.now()
 
     #-------------------------------------------------------------------------
     # Static trait notifiations
@@ -137,7 +136,7 @@ class Configurable(HasTraits):
                 if c._has_section(sname):
                     my_config.merge(c[sname])
         return my_config
-
+    
     def _load_config(self, cfg, section_names=None, traits=None):
         """load traits from a Config object"""
         
@@ -147,8 +146,13 @@ class Configurable(HasTraits):
             section_names = self.section_names()
         
         my_config = self._find_my_config(cfg)
-        for name, config_value in my_config.iteritems():
+        for name, config_value in iteritems(my_config):
             if name in traits:
+                if isinstance(config_value, LazyConfigValue):
+                    # ConfigValue is a wrapper for using append / update on containers
+                    # without having to copy the 
+                    initial = getattr(self, name)
+                    config_value = config_value.get_value(initial)
                 # We have to do a deepcopy here if we don't deepcopy the entire
                 # config object. If we don't, a mutable config_value will be
                 # shared by all instances, effectively making it a class attribute.
@@ -191,7 +195,7 @@ class Configurable(HasTraits):
         final_help = []
         final_help.append(u'%s options' % cls.__name__)
         final_help.append(len(final_help[0])*u'-')
-        for k, v in sorted(cls.class_traits(config=True).iteritems()):
+        for k, v in sorted(cls.class_traits(config=True).items()):
             help = cls.class_get_trait_help(v, inst)
             final_help.append(help)
         return '\n'.join(final_help)
@@ -231,7 +235,7 @@ class Configurable(HasTraits):
     @classmethod
     def class_print_help(cls, inst=None):
         """Get the help string for a single trait and print it."""
-        print cls.class_get_help(inst)
+        print(cls.class_get_help(inst))
 
     @classmethod
     def class_config_section(cls):
@@ -271,7 +275,7 @@ class Configurable(HasTraits):
             lines.append(c('%s will inherit config from: %s'%(cls.__name__, pstr)))
             lines.append('')
 
-        for name, trait in cls.class_traits(config=True).iteritems():
+        for name, trait in iteritems(cls.class_traits(config=True)):
             help = trait.get_metadata('help') or ''
             lines.append(c(help))
             lines.append('# c.%s.%s = %r'%(cls.__name__, name, trait.get_default_value()))

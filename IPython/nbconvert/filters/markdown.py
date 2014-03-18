@@ -16,20 +16,35 @@ markdown within Jinja templates.
 from __future__ import print_function
 
 # Stdlib imports
-import sys
+import os
 import subprocess
+import warnings
+from io import TextIOWrapper, BytesIO
 
+# IPython imports
 from IPython.nbconvert.utils.pandoc import pandoc
+from IPython.nbconvert.utils.exceptions import ConversionException
+from IPython.utils.process import get_output_error_code
+from IPython.utils.py3compat import cast_bytes
+from IPython.utils.version import check_version
 
 #-----------------------------------------------------------------------------
 # Functions
 #-----------------------------------------------------------------------------
+marked = os.path.join(os.path.dirname(__file__), "marked.js")
+_node = None
 
 __all__ = [
     'markdown2html',
+    'markdown2html_pandoc',
+    'markdown2html_marked',
     'markdown2latex',
-    'markdown2rst'
+    'markdown2rst',
 ]
+
+class NodeJSMissing(ConversionException):
+    """Exception raised when node.js is missing."""
+    pass
 
 def markdown2latex(source):
     """Convert a markdown string to LaTeX via pandoc.
@@ -49,10 +64,43 @@ def markdown2latex(source):
     """
     return pandoc(source, 'markdown', 'latex')
 
-
 def markdown2html(source):
+    """Convert a markdown string to HTML"""
+    global _node
+    if _node is None:
+        # prefer md2html via marked if node.js >= 0.9.12 is available
+        # node is called nodejs on debian, so try that first
+        _node = 'nodejs'
+        if not _verify_node(_node):
+            _node = 'node'
+            if not _verify_node(_node):
+                warnings.warn(  "Node.js 0.9.12 or later wasn't found.\n" +
+                                "Nbconvert will try to use Pandoc instead.")
+                _node = False
+    if _node:
+        return markdown2html_marked(source)
+    else:
+        return markdown2html_pandoc(source)
+
+def markdown2html_pandoc(source):
     """Convert a markdown string to HTML via pandoc"""
     return pandoc(source, 'markdown', 'html', extra_args=['--mathjax'])
+
+def markdown2html_marked(source, encoding='utf-8'):
+    """Convert a markdown string to HTML via marked"""
+    command = [_node, marked]
+    try:
+        p = subprocess.Popen(command,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        )
+    except OSError as e:
+        raise NodeJSMissing(
+            "The command '%s' returned an error: %s.\n" % (" ".join(command), e) +
+            "Please check that Node.js is installed."
+        )
+    out, _ = p.communicate(cast_bytes(source, encoding))
+    out = TextIOWrapper(BytesIO(out), encoding, 'replace').read()
+    return out.rstrip('\n')
 
 def markdown2rst(source):
     """Convert a markdown string to LaTeX via pandoc.
@@ -72,3 +120,20 @@ def markdown2rst(source):
     """
     return pandoc(source, 'markdown', 'rst')
 
+def _verify_node(cmd):
+    """Verify that the node command exists and is at least the minimum supported
+    version of node.
+
+    Parameters
+    ----------
+    cmd : string
+        Node command to verify (i.e 'node')."""
+    try:
+        out, err, return_code = get_output_error_code([cmd, '--version'])
+    except OSError:
+        # Command not found
+        return False
+    if return_code:
+        # Command error
+        return False
+    return check_version(out.lstrip('v'), '0.9.12')

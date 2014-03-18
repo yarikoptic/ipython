@@ -1,14 +1,5 @@
 #!/usr/bin/env python
-"""A simple interactive kernel that talks to a frontend over 0MQ.
-
-Things to do:
-
-* Implement `set_parent` logic. Right before doing exec, the Kernel should
-  call set_parent on all the PUB objects with the message about to be executed.
-* Implement random port and security key logic.
-* Implement control messages.
-* Implement event loop and poll version.
-"""
+"""An interactive kernel that talks to frontends over 0MQ."""
 
 #-----------------------------------------------------------------------------
 # Imports
@@ -16,7 +7,6 @@ Things to do:
 from __future__ import print_function
 
 # Standard library imports
-import __builtin__
 import sys
 import time
 import traceback
@@ -38,15 +28,16 @@ from IPython.config.configurable import Configurable
 from IPython.core.error import StdinNotImplementedError
 from IPython.core import release
 from IPython.utils import py3compat
+from IPython.utils.py3compat import builtin_mod, unicode_type, string_types
 from IPython.utils.jsonutil import json_clean
 from IPython.utils.traitlets import (
     Any, Instance, Float, Dict, List, Set, Integer, Unicode,
-    Type
+    Type, Bool,
 )
 
-from serialize import serialize_object, unpack_apply_message
-from session import Session
-from zmqshell import ZMQInteractiveShell
+from .serialize import serialize_object, unpack_apply_message
+from .session import Session
+from .zmqshell import ZMQInteractiveShell
 
 
 #-----------------------------------------------------------------------------
@@ -69,7 +60,7 @@ class Kernel(Configurable):
     def _eventloop_changed(self, name, old, new):
         """schedule call to eventloop from IOLoop"""
         loop = ioloop.IOLoop.instance()
-        loop.add_timeout(time.time()+0.1, self.enter_eventloop)
+        loop.add_callback(self.enter_eventloop)
 
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
     shell_class = Type(ZMQInteractiveShell)
@@ -98,11 +89,17 @@ class Kernel(Configurable):
     ident = Unicode()
 
     def _ident_default(self):
-        return unicode(uuid.uuid4())
-
+        return unicode_type(uuid.uuid4())
 
     # Private interface
     
+    _darwin_app_nap = Bool(True, config=True,
+        help="""Whether to use appnope for compatiblity with OS X App Nap.
+        
+        Only affects OS X >= 10.9.
+        """
+    )
+
     # Time to sleep after flushing the stdout/err buffers in each execute
     # cycle.  While this introduces a hard limit on the minimal latency of the
     # execute cycle, it helps prevent output synchronization problems for
@@ -145,6 +142,7 @@ class Kernel(Configurable):
             profile_dir = self.profile_dir,
             user_module = self.user_module,
             user_ns     = self.user_ns,
+            kernel      = self,
         )
         self.shell.displayhook.session = self.session
         self.shell.displayhook.pub_socket = self.iopub_socket
@@ -168,10 +166,16 @@ class Kernel(Configurable):
         for msg_type in msg_types:
             self.shell_handlers[msg_type] = getattr(self, msg_type)
         
+        comm_msg_types = [ 'comm_open', 'comm_msg', 'comm_close' ]
+        comm_manager = self.shell.comm_manager
+        for msg_type in comm_msg_types:
+            self.shell_handlers[msg_type] = getattr(comm_manager, msg_type)
+        
         control_msg_types = msg_types + [ 'clear_request', 'abort_request' ]
         self.control_handlers = {}
         for msg_type in control_msg_types:
             self.control_handlers[msg_type] = getattr(self, msg_type)
+
 
     def dispatch_control(self, msg):
         """dispatch control requests"""
@@ -246,7 +250,11 @@ class Kernel(Configurable):
     
     def enter_eventloop(self):
         """enter eventloop"""
-        self.log.info("entering eventloop")
+        self.log.info("entering eventloop %s", self.eventloop)
+        for stream in self.shell_streams:
+            # flush any pending replies,
+            # which may be skipped by entering the eventloop
+            stream.flush(zmq.POLLOUT)
         # restore default_int_handler
         signal(SIGINT, default_int_handler)
         while self.eventloop is not None:
@@ -337,7 +345,7 @@ class Kernel(Configurable):
         
         try:
             content = parent[u'content']
-            code = content[u'code']
+            code = py3compat.cast_unicode_py2(content[u'code'])
             silent = content[u'silent']
             store_history = content.get(u'store_history', not silent)
         except:
@@ -358,26 +366,16 @@ class Kernel(Configurable):
             raw_input = input = lambda prompt='' : self._no_raw_input()
 
         if py3compat.PY3:
-            self._sys_raw_input = __builtin__.input
-            __builtin__.input = raw_input
+            self._sys_raw_input = builtin_mod.input
+            builtin_mod.input = raw_input
         else:
-            self._sys_raw_input = __builtin__.raw_input
-            self._sys_eval_input = __builtin__.input
-            __builtin__.raw_input = raw_input
-            __builtin__.input = input
+            self._sys_raw_input = builtin_mod.raw_input
+            self._sys_eval_input = builtin_mod.input
+            builtin_mod.raw_input = raw_input
+            builtin_mod.input = input
 
         # Set the parent message of the display hook and out streams.
-        shell.displayhook.set_parent(parent)
-        shell.display_pub.set_parent(parent)
-        shell.data_pub.set_parent(parent)
-        try:
-            sys.stdout.set_parent(parent)
-        except AttributeError:
-            pass
-        try:
-            sys.stderr.set_parent(parent)
-        except AttributeError:
-            pass
+        shell.set_parent(parent)
 
         # Re-broadcast our input for the benefit of listening clients, and
         # start computing output
@@ -385,8 +383,9 @@ class Kernel(Configurable):
             self._publish_pyin(code, parent, shell.execution_count)
 
         reply_content = {}
+        # FIXME: the shell calls the exception handler itself.
+        shell._reply_content = None
         try:
-            # FIXME: the shell calls the exception handler itself.
             shell.run_cell(code, store_history=store_history, silent=silent)
         except:
             status = u'error'
@@ -404,10 +403,10 @@ class Kernel(Configurable):
         finally:
             # Restore raw_input.
              if py3compat.PY3:
-                 __builtin__.input = self._sys_raw_input
+                 builtin_mod.input = self._sys_raw_input
              else:
-                 __builtin__.raw_input = self._sys_raw_input
-                 __builtin__.input = self._sys_eval_input
+                 builtin_mod.raw_input = self._sys_raw_input
+                 builtin_mod.input = self._sys_eval_input
 
         reply_content[u'status'] = status
 
@@ -583,17 +582,7 @@ class Kernel(Configurable):
 
         # Set the parent message of the display hook and out streams.
         shell = self.shell
-        shell.displayhook.set_parent(parent)
-        shell.display_pub.set_parent(parent)
-        shell.data_pub.set_parent(parent)
-        try:
-            sys.stdout.set_parent(parent)
-        except AttributeError:
-            pass
-        try:
-            sys.stderr.set_parent(parent)
-        except AttributeError:
-            pass
+        shell.set_parent(parent)
 
         # pyin_msg = self.session.msg(u'pyin',{u'code':code}, parent=parent)
         # self.iopub_socket.send(pyin_msg)
@@ -618,10 +607,10 @@ class Kernel(Configurable):
             working.update(ns)
             code = "%s = %s(*%s,**%s)" % (resultname, fname, argname, kwargname)
             try:
-                exec code in shell.user_global_ns, shell.user_ns
+                exec(code, shell.user_global_ns, shell.user_ns)
                 result = working.get(resultname)
             finally:
-                for key in ns.iterkeys():
+                for key in ns:
                     working.pop(key)
 
             result_buf = serialize_object(result,
@@ -671,7 +660,7 @@ class Kernel(Configurable):
     def abort_request(self, stream, ident, parent):
         """abort a specifig msg by id"""
         msg_ids = parent['content'].get('msg_ids', None)
-        if isinstance(msg_ids, basestring):
+        if isinstance(msg_ids, string_types):
             msg_ids = [msg_ids]
         if not msg_ids:
             self.abort_queues()

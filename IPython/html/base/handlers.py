@@ -17,17 +17,21 @@ Authors:
 #-----------------------------------------------------------------------------
 
 
-import datetime
-import email.utils
-import hashlib
+import functools
+import json
 import logging
-import mimetypes
 import os
-import stat
-import threading
+import re
+import sys
+import traceback
+try:
+    # py3
+    from http.client import responses
+except ImportError:
+    from httplib import responses
 
+from jinja2 import TemplateNotFound
 from tornado import web
-from tornado import websocket
 
 try:
     from tornado.log import app_log
@@ -35,74 +39,29 @@ except ImportError:
     app_log = logging.getLogger()
 
 from IPython.config import Application
-from IPython.external.decorator import decorator
 from IPython.utils.path import filefind
-
-#-----------------------------------------------------------------------------
-# Monkeypatch for Tornado <= 2.1.1 - Remove when no longer necessary!
-#-----------------------------------------------------------------------------
-
-# Google Chrome, as of release 16, changed its websocket protocol number.  The
-# parts tornado cares about haven't really changed, so it's OK to continue
-# accepting Chrome connections, but as of Tornado 2.1.1 (the currently released
-# version as of Oct 30/2011) the version check fails, see the issue report:
-
-# https://github.com/facebook/tornado/issues/385
-
-# This issue has been fixed in Tornado post 2.1.1:
-
-# https://github.com/facebook/tornado/commit/84d7b458f956727c3b0d6710
-
-# Here we manually apply the same patch as above so that users of IPython can
-# continue to work with an officially released Tornado.  We make the
-# monkeypatch version check as narrow as possible to limit its effects; once
-# Tornado 2.1.1 is no longer found in the wild we'll delete this code.
-
-import tornado
-
-if tornado.version_info <= (2,1,1):
-
-    def _execute(self, transforms, *args, **kwargs):
-        from tornado.websocket import WebSocketProtocol8, WebSocketProtocol76
-        
-        self.open_args = args
-        self.open_kwargs = kwargs
-
-        # The difference between version 8 and 13 is that in 8 the
-        # client sends a "Sec-Websocket-Origin" header and in 13 it's
-        # simply "Origin".
-        if self.request.headers.get("Sec-WebSocket-Version") in ("7", "8", "13"):
-            self.ws_connection = WebSocketProtocol8(self)
-            self.ws_connection.accept_connection()
-            
-        elif self.request.headers.get("Sec-WebSocket-Version"):
-            self.stream.write(tornado.escape.utf8(
-                "HTTP/1.1 426 Upgrade Required\r\n"
-                "Sec-WebSocket-Version: 8\r\n\r\n"))
-            self.stream.close()
-            
-        else:
-            self.ws_connection = WebSocketProtocol76(self)
-            self.ws_connection.accept_connection()
-
-    websocket.WebSocketHandler._execute = _execute
-    del _execute
-
+from IPython.utils.py3compat import string_types
+from IPython.html.utils import is_hidden
 
 #-----------------------------------------------------------------------------
 # Top-level handlers
 #-----------------------------------------------------------------------------
+non_alphanum = re.compile(r'[^A-Za-z0-9]')
 
-class RequestHandler(web.RequestHandler):
-    """RequestHandler with default variable setting."""
-
-    def render(*args, **kwargs):
-        kwargs.setdefault('message', '')
-        return web.RequestHandler.render(*args, **kwargs)
-
-class AuthenticatedHandler(RequestHandler):
+class AuthenticatedHandler(web.RequestHandler):
     """A RequestHandler with an authenticated user."""
 
+    def set_default_headers(self):
+        headers = self.settings.get('headers', {})
+        for header_name,value in headers.items() :
+            try:
+                self.set_header(header_name, value)
+            except Exception:
+                # tornado raise Exception (not a subclass)
+                # if method is unsupported (websocket and Access-Control-Allow-Origin
+                # for example, so just ignore)
+                pass
+    
     def clear_login_cookie(self):
         self.clear_cookie(self.cookie_name)
     
@@ -120,9 +79,9 @@ class AuthenticatedHandler(RequestHandler):
 
     @property
     def cookie_name(self):
-        default_cookie_name = 'username-{host}'.format(
-            host=self.request.host,
-        ).replace(':', '-')
+        default_cookie_name = non_alphanum.sub('-', 'username-{}'.format(
+            self.request.host
+        ))
         return self.settings.get('cookie_name', default_cookie_name)
     
     @property
@@ -167,35 +126,17 @@ class IPythonHandler(AuthenticatedHandler):
         else:
             return app_log
     
-    @property
-    def use_less(self):
-        """Use less instead of css in templates"""
-        return self.settings.get('use_less', False)
-    
     #---------------------------------------------------------------
     # URLs
     #---------------------------------------------------------------
-    
-    @property
-    def ws_url(self):
-        """websocket url matching the current request
-
-        By default, this is just `''`, indicating that it should match
-        the same host, protocol, port, etc.
-        """
-        return self.settings.get('websocket_url', '')
     
     @property
     def mathjax_url(self):
         return self.settings.get('mathjax_url', '')
     
     @property
-    def base_project_url(self):
-        return self.settings.get('base_project_url', '/')
-    
-    @property
-    def base_kernel_url(self):
-        return self.settings.get('base_kernel_url', '/')
+    def base_url(self):
+        return self.settings.get('base_url', '/')
     
     #---------------------------------------------------------------
     # Manager objects
@@ -214,7 +155,11 @@ class IPythonHandler(AuthenticatedHandler):
         return self.settings['cluster_manager']
     
     @property
-    def project(self):
+    def session_manager(self):
+        return self.settings['session_manager']
+    
+    @property
+    def project_dir(self):
         return self.notebook_manager.notebook_dir
     
     #---------------------------------------------------------------
@@ -233,19 +178,130 @@ class IPythonHandler(AuthenticatedHandler):
     @property
     def template_namespace(self):
         return dict(
-            base_project_url=self.base_project_url,
-            base_kernel_url=self.base_kernel_url,
+            base_url=self.base_url,
             logged_in=self.logged_in,
             login_available=self.login_available,
-            use_less=self.use_less,
+            static_url=self.static_url,
         )
+    
+    def get_json_body(self):
+        """Return the body of the request as JSON data."""
+        if not self.request.body:
+            return None
+        # Do we need to call body.decode('utf-8') here?
+        body = self.request.body.strip().decode(u'utf-8')
+        try:
+            model = json.loads(body)
+        except Exception:
+            self.log.debug("Bad JSON: %r", body)
+            self.log.error("Couldn't parse JSON", exc_info=True)
+            raise web.HTTPError(400, u'Invalid JSON in body of request')
+        return model
+
+    def get_error_html(self, status_code, **kwargs):
+        """render custom error pages"""
+        exception = kwargs.get('exception')
+        message = ''
+        status_message = responses.get(status_code, 'Unknown HTTP Error')
+        if exception:
+            # get the custom message, if defined
+            try:
+                message = exception.log_message % exception.args
+            except Exception:
+                pass
+            
+            # construct the custom reason, if defined
+            reason = getattr(exception, 'reason', '')
+            if reason:
+                status_message = reason
+        
+        # build template namespace
+        ns = dict(
+            status_code=status_code,
+            status_message=status_message,
+            message=message,
+            exception=exception,
+        )
+        
+        # render the template
+        try:
+            html = self.render_template('%s.html' % status_code, **ns)
+        except TemplateNotFound:
+            self.log.debug("No template for %d", status_code)
+            html = self.render_template('error.html', **ns)
+        return html
+
+
+class Template404(IPythonHandler):
+    """Render our 404 template"""
+    def prepare(self):
+        raise web.HTTPError(404)
+
 
 class AuthenticatedFileHandler(IPythonHandler, web.StaticFileHandler):
     """static files should only be accessible when logged in"""
 
     @web.authenticated
     def get(self, path):
+        if os.path.splitext(path)[1] == '.ipynb':
+            name = os.path.basename(path)
+            self.set_header('Content-Type', 'application/json')
+            self.set_header('Content-Disposition','attachment; filename="%s"' % name)
+        
         return web.StaticFileHandler.get(self, path)
+    
+    def compute_etag(self):
+        return None
+    
+    def validate_absolute_path(self, root, absolute_path):
+        """Validate and return the absolute path.
+        
+        Requires tornado 3.1
+        
+        Adding to tornado's own handling, forbids the serving of hidden files.
+        """
+        abs_path = super(AuthenticatedFileHandler, self).validate_absolute_path(root, absolute_path)
+        abs_root = os.path.abspath(root)
+        if is_hidden(abs_path, abs_root):
+            self.log.info("Refusing to serve hidden file, via 404 Error")
+            raise web.HTTPError(404)
+        return abs_path
+
+
+def json_errors(method):
+    """Decorate methods with this to return GitHub style JSON errors.
+    
+    This should be used on any JSON API on any handler method that can raise HTTPErrors.
+    
+    This will grab the latest HTTPError exception using sys.exc_info
+    and then:
+    
+    1. Set the HTTP status code based on the HTTPError
+    2. Create and return a JSON body with a message field describing
+       the error in a human readable form.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            result = method(self, *args, **kwargs)
+        except web.HTTPError as e:
+            status = e.status_code
+            message = e.log_message
+            self.set_status(e.status_code)
+            self.finish(json.dumps(dict(message=message)))
+        except Exception:
+            self.log.error("Unhandled error in API request", exc_info=True)
+            status = 500
+            message = "Unknown server error"
+            t, value, tb = sys.exc_info()
+            self.set_status(status)
+            tb_text = ''.join(traceback.format_exception(t, value, tb))
+            reply = dict(message=message, traceback=tb_text)
+            self.finish(json.dumps(reply))
+        else:
+            return result
+    return wrapper
+
 
 
 #-----------------------------------------------------------------------------
@@ -258,20 +314,23 @@ HTTPError = web.HTTPError
 class FileFindHandler(web.StaticFileHandler):
     """subclass of StaticFileHandler for serving files from a search path"""
     
+    # cache search results, don't search for files more than once
     _static_paths = {}
-    # _lock is needed for tornado < 2.2.0 compat
-    _lock = threading.Lock()  # protects _static_hashes
     
     def initialize(self, path, default_filename=None):
-        if isinstance(path, basestring):
+        if isinstance(path, string_types):
             path = [path]
-        self.roots = tuple(
-            os.path.abspath(os.path.expanduser(p)) + os.path.sep for p in path
+        
+        self.root = tuple(
+            os.path.abspath(os.path.expanduser(p)) + os.sep for p in path
         )
         self.default_filename = default_filename
     
+    def compute_etag(self):
+        return None
+    
     @classmethod
-    def locate_file(cls, path, roots):
+    def get_absolute_path(cls, roots, path):
         """locate a file to serve on our static file search path"""
         with cls._lock:
             if path in cls._static_paths:
@@ -279,137 +338,48 @@ class FileFindHandler(web.StaticFileHandler):
             try:
                 abspath = os.path.abspath(filefind(path, roots))
             except IOError:
-                # empty string should always give exists=False
+                # IOError means not found
                 return ''
-        
-            # os.path.abspath strips a trailing /
-            # it needs to be temporarily added back for requests to root/
-            if not (abspath + os.path.sep).startswith(roots):
-                raise HTTPError(403, "%s is not in root static directory", path)
-        
+            
             cls._static_paths[path] = abspath
             return abspath
     
-    def get(self, path, include_body=True):
-        path = self.parse_url_path(path)
+    def validate_absolute_path(self, root, absolute_path):
+        """check if the file should be served (raises 404, 403, etc.)"""
+        if absolute_path == '':
+            raise web.HTTPError(404)
         
-        # begin subclass override
-        abspath = self.locate_file(path, self.roots)
-        # end subclass override
+        for root in self.root:
+            if (absolute_path + os.sep).startswith(root):
+                break
         
-        if os.path.isdir(abspath) and self.default_filename is not None:
-            # need to look at the request.path here for when path is empty
-            # but there is some prefix to the path that was already
-            # trimmed by the routing
-            if not self.request.path.endswith("/"):
-                self.redirect(self.request.path + "/")
-                return
-            abspath = os.path.join(abspath, self.default_filename)
-        if not os.path.exists(abspath):
-            raise HTTPError(404)
-        if not os.path.isfile(abspath):
-            raise HTTPError(403, "%s is not a file", path)
-
-        stat_result = os.stat(abspath)
-        modified = datetime.datetime.utcfromtimestamp(stat_result[stat.ST_MTIME])
-
-        self.set_header("Last-Modified", modified)
-
-        mime_type, encoding = mimetypes.guess_type(abspath)
-        if mime_type:
-            self.set_header("Content-Type", mime_type)
-
-        cache_time = self.get_cache_time(path, modified, mime_type)
-
-        if cache_time > 0:
-            self.set_header("Expires", datetime.datetime.utcnow() + \
-                                       datetime.timedelta(seconds=cache_time))
-            self.set_header("Cache-Control", "max-age=" + str(cache_time))
-        else:
-            self.set_header("Cache-Control", "public")
-
-        self.set_extra_headers(path)
-
-        # Check the If-Modified-Since, and don't send the result if the
-        # content has not been modified
-        ims_value = self.request.headers.get("If-Modified-Since")
-        if ims_value is not None:
-            date_tuple = email.utils.parsedate(ims_value)
-            if_since = datetime.datetime(*date_tuple[:6])
-            if if_since >= modified:
-                self.set_status(304)
-                return
-
-        with open(abspath, "rb") as file:
-            data = file.read()
-            hasher = hashlib.sha1()
-            hasher.update(data)
-            self.set_header("Etag", '"%s"' % hasher.hexdigest())
-            if include_body:
-                self.write(data)
-            else:
-                assert self.request.method == "HEAD"
-                self.set_header("Content-Length", len(data))
-
-    @classmethod
-    def get_version(cls, settings, path):
-        """Generate the version string to be used in static URLs.
-
-        This method may be overridden in subclasses (but note that it
-        is a class method rather than a static method).  The default
-        implementation uses a hash of the file's contents.
-
-        ``settings`` is the `Application.settings` dictionary and ``path``
-        is the relative location of the requested asset on the filesystem.
-        The returned value should be a string, or ``None`` if no version
-        could be determined.
-        """
-        # begin subclass override:
-        static_paths = settings['static_path']
-        if isinstance(static_paths, basestring):
-            static_paths = [static_paths]
-        roots = tuple(
-            os.path.abspath(os.path.expanduser(p)) + os.path.sep for p in static_paths
-        )
-
-        try:
-            abs_path = filefind(path, roots)
-        except IOError:
-            app_log.error("Could not find static file %r", path)
-            return None
-        
-        # end subclass override
-        
-        with cls._lock:
-            hashes = cls._static_hashes
-            if abs_path not in hashes:
-                try:
-                    f = open(abs_path, "rb")
-                    hashes[abs_path] = hashlib.md5(f.read()).hexdigest()
-                    f.close()
-                except Exception:
-                    app_log.error("Could not open static file %r", path)
-                    hashes[abs_path] = None
-            hsh = hashes.get(abs_path)
-            if hsh:
-                return hsh[:5]
-        return None
+        return super(FileFindHandler, self).validate_absolute_path(root, absolute_path)
 
 
-    def parse_url_path(self, url_path):
-        """Converts a static URL path into a filesystem path.
+class TrailingSlashHandler(web.RequestHandler):
+    """Simple redirect handler that strips trailing slashes
+    
+    This should be the first, highest priority handler.
+    """
+    
+    SUPPORTED_METHODS = ['GET']
+    
+    def get(self):
+        self.redirect(self.request.uri.rstrip('/'))
 
-        ``url_path`` is the path component of the URL with
-        ``static_url_prefix`` removed.  The return value should be
-        filesystem path relative to ``static_path``.
-        """
-        if os.path.sep != "/":
-            url_path = url_path.replace("/", os.path.sep)
-        return url_path
+#-----------------------------------------------------------------------------
+# URL pattern fragments for re-use
+#-----------------------------------------------------------------------------
+
+path_regex = r"(?P<path>(?:/.*)*)"
+notebook_name_regex = r"(?P<name>[^/]+\.ipynb)"
+notebook_path_regex = "%s/%s" % (path_regex, notebook_name_regex)
 
 #-----------------------------------------------------------------------------
 # URL to handler mappings
 #-----------------------------------------------------------------------------
 
 
-default_handlers = []
+default_handlers = [
+    (r".*/", TrailingSlashHandler)
+]

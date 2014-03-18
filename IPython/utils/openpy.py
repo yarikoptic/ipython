@@ -11,8 +11,10 @@ from io import TextIOWrapper, BytesIO
 import os.path
 import re
 
-cookie_re = re.compile(ur"coding[:=]\s*([-\w.]+)", re.UNICODE)
-cookie_comment_re = re.compile(ur"^\s*#.*coding[:=]\s*([-\w.]+)", re.UNICODE)
+from .py3compat import unicode_type
+
+cookie_re = re.compile(r"coding[:=]\s*([-\w.]+)", re.UNICODE)
+cookie_comment_re = re.compile(r"^\s*#.*coding[:=]\s*([-\w.]+)", re.UNICODE)
 
 try:
     # Available in Python 3
@@ -128,7 +130,7 @@ def source_to_unicode(txt, errors='replace', skip_encoding_cookie=True):
     txt can be either a bytes buffer or a string containing the source
     code.
     """
-    if isinstance(txt, unicode):
+    if isinstance(txt, unicode_type):
         return txt
     if isinstance(txt, bytes):
         buffer = BytesIO(txt)
@@ -205,7 +207,11 @@ def read_py_url(url, errors='replace', skip_encoding_cookie=True):
     -------
     A unicode string containing the contents of the file.
     """
-    from urllib import urlopen  # Deferred import for faster start
+    # Deferred import for faster start
+    try:
+        from urllib.request import urlopen # Py 3
+    except ImportError:
+        from urllib import urlopen
     response = urlopen(url)
     buffer = io.BytesIO(response.read())
     return source_to_unicode(buffer, errors, skip_encoding_cookie)

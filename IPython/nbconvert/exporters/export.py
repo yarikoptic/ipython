@@ -16,9 +16,11 @@ Module containing single call export functions.
 from functools import wraps
 
 from IPython.nbformat.v3.nbbase import NotebookNode
-from IPython.config import Config
+from IPython.utils.decorators import undoc
+from IPython.utils.py3compat import string_types
 
 from .exporter import Exporter
+from .templateexporter import TemplateExporter
 from .html import HTMLExporter
 from .slides import SlidesExporter
 from .latex import LatexExporter
@@ -30,18 +32,20 @@ from .rst import RSTExporter
 # Classes
 #-----------------------------------------------------------------------------
 
+@undoc
 def DocDecorator(f):
     
     #Set docstring of function
     f.__doc__ = f.__doc__ + """
-    nb : Notebook node
+    nb : :class:`~{nbnode_mod}.NotebookNode`
+      The notebook to export.
     config : config (optional, keyword arg)
         User configuration instance.
     resources : dict (optional, keyword arg)
         Resources used in the conversion process.
         
     Returns
-    ----------
+    -------
     tuple- output, resources, exporter_instance
     output : str
         Jinja 2 output.  This is the resulting converted notebook.
@@ -53,8 +57,10 @@ def DocDecorator(f):
         to caller because it provides a 'file_extension' property which
         specifies what extension the output should be saved as.
 
+    Notes
+    -----
     WARNING: API WILL CHANGE IN FUTURE RELEASES OF NBCONVERT
-    """
+    """.format(nbnode_mod=NotebookNode.__module__)
             
     @wraps(f)
     def decorator(*args, **kwargs):
@@ -90,11 +96,13 @@ def export(exporter, nb, **kw):
     """
     Export a notebook object using specific exporter class.
     
-    exporter : Exporter class type or instance
-        Class type or instance of the exporter that should be used.  If the 
-        method initializes it's own instance of the class, it is ASSUMED that 
-        the class type provided exposes a constructor (__init__) with the same 
-        signature as the base Exporter class.
+    Parameters
+    ----------
+    exporter : class:`~IPython.nbconvert.exporters.exporter.Exporter` class or instance
+      Class type or instance of the exporter that should be used.  If the
+      method initializes it's own instance of the class, it is ASSUMED that
+      the class type provided exposes a constructor (``__init__``) with the same
+      signature as the base Exporter class.
     """
     
     #Check arguments
@@ -115,14 +123,14 @@ def export(exporter, nb, **kw):
     #Try to convert the notebook using the appropriate conversion function.
     if isinstance(nb, NotebookNode):
         output, resources = exporter_instance.from_notebook_node(nb, resources)
-    elif isinstance(nb, basestring):
+    elif isinstance(nb, string_types):
         output, resources = exporter_instance.from_filename(nb, resources)
     else:
         output, resources = exporter_instance.from_file(nb, resources)
     return output, resources
 
 exporter_map = dict(
-    custom=Exporter,
+    custom=TemplateExporter,
     html=HTMLExporter,
     slides=SlidesExporter,
     latex=LatexExporter,
@@ -150,6 +158,8 @@ def export_by_name(format_name, nb, **kw):
     (Inspect) is used to find the template's corresponding explicit export
     method defined in this module.  That method is then called directly.
     
+    Parameters
+    ----------
     format_name : str
         Name of the template style to export to.
     """

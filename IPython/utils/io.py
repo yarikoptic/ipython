@@ -10,14 +10,17 @@ IO related utilities.
 #  the file COPYING, distributed as part of this software.
 #-----------------------------------------------------------------------------
 from __future__ import print_function
+from __future__ import absolute_import
 
 #-----------------------------------------------------------------------------
 # Imports
 #-----------------------------------------------------------------------------
+import codecs
 import os
 import sys
 import tempfile
-from StringIO import StringIO
+from .capture import CapturedIO, capture_output
+from .py3compat import string_types, input, PY3
 
 #-----------------------------------------------------------------------------
 # Code
@@ -41,6 +44,11 @@ class IOStream:
         for meth in filter(clone, dir(stream)):
             setattr(self, meth, getattr(stream, meth))
 
+    def __repr__(self):
+        cls = self.__class__
+        tpl = '{mod}.{cls}({args})'
+        return tpl.format(mod=cls.__module__, cls=cls.__name__, args=self.stream)
+
     def write(self,data):
         try:
             self._swrite(data)
@@ -56,7 +64,7 @@ class IOStream:
                       file=sys.stderr)
 
     def writelines(self, lines):
-        if isinstance(lines, basestring):
+        if isinstance(lines, string_types):
             lines = [lines]
         for line in lines:
             self.write(line)
@@ -73,7 +81,7 @@ class IOStream:
         pass
 
 # setup stdin/stdout/stderr to sys.stdin/sys.stdout/sys.stderr
-devnull = open(os.devnull, 'a')
+devnull = open(os.devnull, 'w') 
 stdin = IOStream(sys.stdin, fallback=devnull)
 stdout = IOStream(sys.stdout, fallback=devnull)
 stderr = IOStream(sys.stderr, fallback=devnull)
@@ -154,11 +162,13 @@ class Tee(object):
             self.close()
 
 
-def ask_yes_no(prompt,default=None):
+def ask_yes_no(prompt, default=None, interrupt=None):
     """Asks a question and returns a boolean (y/n) answer.
 
     If default is given (one of 'y','n'), it is used if the user input is
-    empty. Otherwise the question is repeated until an answer is given.
+    empty. If interrupt is given (one of 'y','n'), it is used if the user
+    presses Ctrl-C. Otherwise the question is repeated until an answer is
+    given.
 
     An EOF is treated as the default answer.  If there is no default, an
     exception is raised to prevent infinite loops.
@@ -169,11 +179,12 @@ def ask_yes_no(prompt,default=None):
     ans = None
     while ans not in answers.keys():
         try:
-            ans = raw_input(prompt+' ').lower()
+            ans = input(prompt+' ').lower()
             if not ans:  # response was an empty string
                 ans = default
         except KeyboardInterrupt:
-            pass
+            if interrupt:
+                ans = interrupt
         except EOFError:
             if default in answers.keys():
                 ans = default
@@ -227,62 +238,25 @@ def raw_print_err(*args, **kw):
 rprint = raw_print
 rprinte = raw_print_err
 
+def unicode_std_stream(stream='stdout'):
+    u"""Get a wrapper to write unicode to stdout/stderr as UTF-8.
 
-class CapturedIO(object):
-    """Simple object for containing captured stdout/err StringIO objects"""
-    
-    def __init__(self, stdout, stderr):
-        self._stdout = stdout
-        self._stderr = stderr
-    
-    def __str__(self):
-        return self.stdout
-    
-    @property
-    def stdout(self):
-        if not self._stdout:
-            return ''
-        return self._stdout.getvalue()
-    
-    @property
-    def stderr(self):
-        if not self._stderr:
-            return ''
-        return self._stderr.getvalue()
-    
-    def show(self):
-        """write my output to sys.stdout/err as appropriate"""
-        sys.stdout.write(self.stdout)
-        sys.stderr.write(self.stderr)
-        sys.stdout.flush()
-        sys.stderr.flush()
-    
-    __call__ = show
+    This ignores environment variables and default encodings, to reliably write
+    unicode to stdout or stderr.
 
+    ::
 
-class capture_output(object):
-    """context manager for capturing stdout/err"""
-    stdout = True
-    stderr = True
-    
-    def __init__(self, stdout=True, stderr=True):
-        self.stdout = stdout
-        self.stderr = stderr
-    
-    def __enter__(self):
-        self.sys_stdout = sys.stdout
-        self.sys_stderr = sys.stderr
-        
-        stdout = stderr = False
-        if self.stdout:
-            stdout = sys.stdout = StringIO()
-        if self.stderr:
-            stderr = sys.stderr = StringIO()
-        
-        return CapturedIO(stdout, stderr)
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = self.sys_stdout
-        sys.stderr = self.sys_stderr
+        unicode_std_stream().write(u'ł@e¶ŧ←')
+    """
+    assert stream in ('stdout', 'stderr')
+    stream  = getattr(sys, stream)
+    if PY3:
+        try:
+            stream_b = stream.buffer
+        except AttributeError:
+            # sys.stdout has been replaced - use it directly
+            return stream
+    else:
+        stream_b = stream
 
-
+    return codecs.getwriter('utf-8')(stream_b)

@@ -10,6 +10,7 @@
 //============================================================================
 
 var IPython = (function (IPython) {
+    "use strict";
 
     var MainToolBar = function (selector) {
         IPython.ToolBar.apply(this, arguments);
@@ -32,6 +33,20 @@ var IPython = (function (IPython) {
                         }
                 }
             ]);
+
+        this.add_buttons_group([
+                {
+                    id : 'insert_below_b',
+                    label : 'Insert Cell Below',
+                    icon : 'icon-plus-sign',
+                    callback : function () {
+                        IPython.notebook.insert_cell_below('code');
+                        IPython.notebook.select_next();
+                        IPython.notebook.focus_cell();
+                        }
+                }
+            ],'insert_above_below');
+
         this.add_buttons_group([
                 {
                     id : 'cut_b',
@@ -78,24 +93,6 @@ var IPython = (function (IPython) {
                 }
             ],'move_up_down');
         
-        this.add_buttons_group([
-                {
-                    id : 'insert_above_b',
-                    label : 'Insert Cell Above',
-                    icon : 'icon-circle-arrow-up',
-                    callback : function () {
-                        IPython.notebook.insert_cell_above('code');
-                        }
-                },
-                {
-                    id : 'insert_below_b',
-                    label : 'Insert Cell Below',
-                    icon : 'icon-circle-arrow-down',
-                    callback : function () {
-                        IPython.notebook.insert_cell_below('code');
-                        }
-                }
-            ],'insert_above_below');
 
         this.add_buttons_group([
                 {
@@ -103,15 +100,24 @@ var IPython = (function (IPython) {
                     label : 'Run Cell',
                     icon : 'icon-play',
                     callback : function () {
-                    IPython.notebook.execute_selected_cell();
-                        }
+                        // emulate default shift-enter behavior
+                        IPython.notebook.execute_cell_and_select_below();
+                    }
                 },
                 {
                     id : 'interrupt_b',
                     label : 'Interrupt',
                     icon : 'icon-stop',
                     callback : function () {
-                        IPython.notebook.kernel.interrupt();
+                        IPython.notebook.session.interrupt_kernel();
+                        }
+                },
+                {
+                    id : 'repeat_b',
+                    label : 'Restart Kernel',
+                    icon : 'icon-repeat',
+                    callback : function () {
+                        IPython.notebook.restart_kernel();
                         }
                 }
             ],'run_int');
@@ -124,7 +130,7 @@ var IPython = (function (IPython) {
                 // .addClass('ui-widget-content')
                 .append($('<option/>').attr('value','code').text('Code'))
                 .append($('<option/>').attr('value','markdown').text('Markdown'))
-                .append($('<option/>').attr('value','raw').text('Raw Text'))
+                .append($('<option/>').attr('value','raw').text('Raw NBConvert'))
                 .append($('<option/>').attr('value','heading1').text('Heading 1'))
                 .append($('<option/>').attr('value','heading2').text('Heading 2'))
                 .append($('<option/>').attr('value','heading3').text('Heading 3'))
@@ -146,9 +152,11 @@ var IPython = (function (IPython) {
                 var val = $(this).val()
                 if (val =='') {
                     IPython.CellToolbar.global_hide();
+                    delete IPython.notebook.metadata.celltoolbar;
                 } else {
                     IPython.CellToolbar.global_show();
                     IPython.CellToolbar.activate_preset(val);
+                    IPython.notebook.metadata.celltoolbar = val;
                 }
             });
         // Setup the currently registered presets.

@@ -16,12 +16,17 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
+import os
+
 from tornado import web
 
 from IPython.kernel.multikernelmanager import MultiKernelManager
 from IPython.utils.traitlets import (
     Dict, List, Unicode,
 )
+
+from IPython.html.utils import to_os_path
+from IPython.utils.py3compat import getcwd
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -36,55 +41,53 @@ class MappingKernelManager(MultiKernelManager):
 
     kernel_argv = List(Unicode)
     
-    _notebook_mapping = Dict()
+    root_dir = Unicode(getcwd(), config=True)
+
+    def _root_dir_changed(self, name, old, new):
+        """Do a bit of validation of the root dir."""
+        if not os.path.isabs(new):
+            # If we receive a non-absolute path, make it absolute.
+            self.root_dir = os.path.abspath(new)
+            return
+        if not os.path.exists(new) or not os.path.isdir(new):
+            raise TraitError("kernel root dir %r is not a directory" % new)
 
     #-------------------------------------------------------------------------
     # Methods for managing kernels and sessions
     #-------------------------------------------------------------------------
 
-    def kernel_for_notebook(self, notebook_id):
-        """Return the kernel_id for a notebook_id or None."""
-        return self._notebook_mapping.get(notebook_id)
-
-    def set_kernel_for_notebook(self, notebook_id, kernel_id):
-        """Associate a notebook with a kernel."""
-        if notebook_id is not None:
-            self._notebook_mapping[notebook_id] = kernel_id
-
-    def notebook_for_kernel(self, kernel_id):
-        """Return the notebook_id for a kernel_id or None."""
-        for notebook_id, kid in self._notebook_mapping.iteritems():
-            if kernel_id == kid:
-                return notebook_id
-        return None
-
-    def delete_mapping_for_kernel(self, kernel_id):
-        """Remove the kernel/notebook mapping for kernel_id."""
-        notebook_id = self.notebook_for_kernel(kernel_id)
-        if notebook_id is not None:
-            del self._notebook_mapping[notebook_id]
-
     def _handle_kernel_died(self, kernel_id):
         """notice that a kernel died"""
         self.log.warn("Kernel %s died, removing from map.", kernel_id)
-        self.delete_mapping_for_kernel(kernel_id)
         self.remove_kernel(kernel_id)
+    
+    def cwd_for_path(self, path):
+        """Turn API path into absolute OS path."""
+        os_path = to_os_path(path, self.root_dir)
+        # in the case of notebooks and kernels not being on the same filesystem,
+        # walk up to root_dir if the paths don't exist
+        while not os.path.exists(os_path) and os_path != self.root_dir:
+            os_path = os.path.dirname(os_path)
+        return os_path
 
-    def start_kernel(self, notebook_id=None, **kwargs):
-        """Start a kernel for a notebook an return its kernel_id.
+    def start_kernel(self, kernel_id=None, path=None, **kwargs):
+        """Start a kernel for a session an return its kernel_id.
 
         Parameters
         ----------
-        notebook_id : uuid
-            The uuid of the notebook to associate the new kernel with. If this
-            is not None, this kernel will be persistent whenever the notebook
-            requests a kernel.
+        kernel_id : uuid
+            The uuid to associate the new kernel with. If this
+            is not None, this kernel will be persistent whenever it is 
+            requested.
+        path : API path
+            The API path (unicode, '/' delimited) for the cwd.
+            Will be transformed to an OS path relative to root_dir.
         """
-        kernel_id = self.kernel_for_notebook(notebook_id)
         if kernel_id is None:
             kwargs['extra_arguments'] = self.kernel_argv
+            if path is not None:
+                kwargs['cwd'] = self.cwd_for_path(path)
             kernel_id = super(MappingKernelManager, self).start_kernel(**kwargs)
-            self.set_kernel_for_notebook(notebook_id, kernel_id)
             self.log.info("Kernel started: %s" % kernel_id)
             self.log.debug("Kernel args: %r" % kwargs)
             # register callback for failed auto-restart
@@ -93,18 +96,33 @@ class MappingKernelManager(MultiKernelManager):
                 'dead',
             )
         else:
+            self._check_kernel_id(kernel_id)
             self.log.info("Using existing kernel: %s" % kernel_id)
-
         return kernel_id
 
     def shutdown_kernel(self, kernel_id, now=False):
         """Shutdown a kernel by kernel_id"""
+        self._check_kernel_id(kernel_id)
         super(MappingKernelManager, self).shutdown_kernel(kernel_id, now=now)
-        self.delete_mapping_for_kernel(kernel_id)
+
+    def kernel_model(self, kernel_id):
+        """Return a dictionary of kernel information described in the
+        JSON standard model."""
+        self._check_kernel_id(kernel_id)
+        model = {"id":kernel_id}
+        return model
+
+    def list_kernels(self):
+        """Returns a list of kernel_id's of kernels running."""
+        kernels = []
+        kernel_ids = super(MappingKernelManager, self).list_kernel_ids()
+        for kernel_id in kernel_ids:
+            model = self.kernel_model(kernel_id)
+            kernels.append(model)
+        return kernels
 
     # override _check_kernel_id to raise 404 instead of KeyError
     def _check_kernel_id(self, kernel_id):
         """Check a that a kernel_id exists and raise 404 if not."""
         if kernel_id not in self:
             raise web.HTTPError(404, u'Kernel does not exist: %s' % kernel_id)
-

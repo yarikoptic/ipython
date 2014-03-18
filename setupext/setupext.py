@@ -107,7 +107,7 @@ def check_for_pexpect():
     try:
         import pexpect
     except ImportError:
-        print_status("pexpect", "no (required for running standalone doctests)")
+        print_status("pexpect", "no (will use bundled version in IPython.external)")
         return False
     else:
         print_status("pexpect", pexpect.__version__)
@@ -137,14 +137,26 @@ def check_for_tornado():
         print_status('tornado', "no (required for notebook)")
         return False
     else:
-        print_status('tornado', tornado.version)
-        return True
+        if getattr(tornado, 'version_info', (0,)) < (3,1):
+            print_status('tornado', "no (have %s, but require >= 3.1.0)" % tornado.version)
+            return False
+        else:
+            print_status('tornado', tornado.version)
+            return True
 
 def check_for_readline():
     from distutils.version import LooseVersion
+    readline = None
     try:
-        import readline
+        import gnureadline as readline
     except ImportError:
+        pass
+    if readline is None:
+        try:
+            import readline
+        except ImportError:
+            pass
+    if readline is None:
         try:
             import pyreadline
             vs = pyreadline.release.version
@@ -158,5 +170,8 @@ def check_for_readline():
             print_status('readline', "no pyreadline-%s < 1.7.1" % vs)
             return False
     else:
+        if sys.platform == 'darwin' and 'libedit' in readline.__doc__:
+            print_status('readline', "no (libedit detected)")
+            return False
         print_status('readline', "yes")
         return True

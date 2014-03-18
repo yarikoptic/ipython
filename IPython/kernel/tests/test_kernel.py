@@ -1,3 +1,4 @@
+# coding: utf-8
 """test the IPython Kernel"""
 
 #-------------------------------------------------------------------------------
@@ -11,104 +12,23 @@
 # Imports
 #-------------------------------------------------------------------------------
 
-import os
-import shutil
+import io
+import os.path
 import sys
-import tempfile
-
-from contextlib import contextmanager
-from subprocess import PIPE
 
 import nose.tools as nt
 
-from IPython.kernel import KernelManager
-from IPython.kernel.tests.test_message_spec import execute, flush_channels
 from IPython.testing import decorators as dec, tools as tt
-from IPython.utils import path, py3compat
+from IPython.utils import py3compat
+from IPython.utils.path import locate_profile
+from IPython.utils.tempdir import TemporaryDirectory
+
+from .utils import (new_kernel, kernel, TIMEOUT, assemble_output, execute,
+                    flush_channels, wait_for_idle)
 
 #-------------------------------------------------------------------------------
 # Tests
 #-------------------------------------------------------------------------------
-IPYTHONDIR = None
-save_env = None
-save_get_ipython_dir = None
-
-STARTUP_TIMEOUT = 60
-TIMEOUT = 15
-
-def setup():
-    """setup temporary IPYTHONDIR for tests"""
-    global IPYTHONDIR
-    global save_env
-    global save_get_ipython_dir
-
-    IPYTHONDIR = tempfile.mkdtemp()
-
-    save_env = os.environ.copy()
-    os.environ["IPYTHONDIR"] = IPYTHONDIR
-
-    save_get_ipython_dir = path.get_ipython_dir
-    path.get_ipython_dir = lambda : IPYTHONDIR
-
-
-def teardown():
-    path.get_ipython_dir = save_get_ipython_dir
-    os.environ = save_env
-
-    try:
-        shutil.rmtree(IPYTHONDIR)
-    except (OSError, IOError):
-        # no such file
-        pass
-
-
-@contextmanager
-def new_kernel():
-    """start a kernel in a subprocess, and wait for it to be ready
-
-    Returns
-    -------
-    kernel_manager: connected KernelManager instance
-    """
-    KM = KernelManager()
-
-    KM.start_kernel(stdout=PIPE, stderr=PIPE)
-    KC = KM.client()
-    KC.start_channels()
-
-    # wait for kernel to be ready
-    KC.shell_channel.execute("import sys")
-    KC.shell_channel.get_msg(block=True, timeout=STARTUP_TIMEOUT)
-    flush_channels(KC)
-    try:
-        yield KC
-    finally:
-        KC.stop_channels()
-        KM.shutdown_kernel()
-
-
-def assemble_output(iopub):
-    """assemble stdout/err from an execution"""
-    stdout = ''
-    stderr = ''
-    while True:
-        msg = iopub.get_msg(block=True, timeout=1)
-        msg_type = msg['msg_type']
-        content = msg['content']
-        if msg_type == 'status' and content['execution_state'] == 'idle':
-            # idle message signals end of output
-            break
-        elif msg['msg_type'] == 'stream':
-            if content['name'] == 'stdout':
-                stdout = stdout + content['data']
-            elif content['name'] == 'stderr':
-                stderr = stderr + content['data']
-            else:
-                raise KeyError("bad stream: %r" % content['name'])
-        else:
-            # other output, ignored
-            pass
-    return stdout, stderr
 
 
 def _check_mp_mode(kc, expected=False, stream="stdout"):
@@ -123,7 +43,7 @@ def _check_mp_mode(kc, expected=False, stream="stdout"):
 
 def test_simple_print():
     """simple print statement in kernel"""
-    with new_kernel() as kc:
+    with kernel() as kc:
         iopub = kc.iopub_channel
         msg_id, content = execute(kc=kc, code="print ('hi')")
         stdout, stderr = assemble_output(iopub)
@@ -132,12 +52,27 @@ def test_simple_print():
         _check_mp_mode(kc, expected=False)
 
 
+def test_sys_path():
+    """test that sys.path doesn't get messed up by default"""
+    with kernel() as kc:
+        msg_id, content = execute(kc=kc, code="import sys; print (repr(sys.path[0]))")
+        stdout, stderr = assemble_output(kc.iopub_channel)
+        nt.assert_equal(stdout, "''\n")
+
+def test_sys_path_profile_dir():
+    """test that sys.path doesn't get messed up when `--profile-dir` is specified"""
+    
+    with new_kernel(['--profile-dir', locate_profile('default')]) as kc:
+        msg_id, content = execute(kc=kc, code="import sys; print (repr(sys.path[0]))")
+        stdout, stderr = assemble_output(kc.iopub_channel)
+        nt.assert_equal(stdout, "''\n")
+
 @dec.knownfailureif(sys.platform == 'win32', "subprocess prints fail on Windows")
 def test_subprocess_print():
     """printing from forked mp.Process"""
     with new_kernel() as kc:
         iopub = kc.iopub_channel
-
+        
         _check_mp_mode(kc, expected=False)
         flush_channels(kc)
         np = 5
@@ -148,11 +83,11 @@ def test_subprocess_print():
             "for p in pool: p.start()",
             "for p in pool: p.join()"
         ])
-
+        
         expected = '\n'.join([
             "hello %s" % i for i in range(np)
         ]) + '\n'
-
+        
         msg_id, content = execute(kc=kc, code=code)
         stdout, stderr = assemble_output(iopub)
         nt.assert_equal(stdout.count("hello"), np, stdout)
@@ -165,9 +100,9 @@ def test_subprocess_print():
 
 def test_subprocess_noprint():
     """mp.Process without print doesn't trigger iostream mp_mode"""
-    with new_kernel() as kc:
+    with kernel() as kc:
         iopub = kc.iopub_channel
-
+        
         np = 5
         code = '\n'.join([
             "import multiprocessing as mp",
@@ -175,7 +110,7 @@ def test_subprocess_noprint():
             "for p in pool: p.start()",
             "for p in pool: p.join()"
         ])
-
+        
         msg_id, content = execute(kc=kc, code=code)
         stdout, stderr = assemble_output(iopub)
         nt.assert_equal(stdout, '')
@@ -190,14 +125,14 @@ def test_subprocess_error():
     """error in mp.Process doesn't crash"""
     with new_kernel() as kc:
         iopub = kc.iopub_channel
-
+        
         code = '\n'.join([
             "import multiprocessing as mp",
             "p = mp.Process(target=int, args=('hi',))",
             "p.start()",
             "p.join()",
         ])
-
+        
         msg_id, content = execute(kc=kc, code=code)
         stdout, stderr = assemble_output(iopub)
         nt.assert_equal(stdout, '')
@@ -210,9 +145,9 @@ def test_subprocess_error():
 
 def test_raw_input():
     """test [raw_]input"""
-    with new_kernel() as kc:
+    with kernel() as kc:
         iopub = kc.iopub_channel
-
+        
         input_f = "input" if py3compat.PY3 else "raw_input"
         theprompt = "prompt> "
         code = 'print({input_f}("{theprompt}"))'.format(**locals())
@@ -232,9 +167,9 @@ def test_raw_input():
 @dec.skipif(py3compat.PY3)
 def test_eval_input():
     """test input() on Python 2"""
-    with new_kernel() as kc:
+    with kernel() as kc:
         iopub = kc.iopub_channel
-
+        
         input_f = "input" if py3compat.PY3 else "raw_input"
         theprompt = "prompt> "
         code = 'print(input("{theprompt}"))'.format(**locals())
@@ -250,6 +185,23 @@ def test_eval_input():
         nt.assert_equal(stdout, "2\n")
 
 
+def test_save_history():
+    # Saving history from the kernel with %hist -f was failing because of
+    # unicode problems on Python 2.
+    with kernel() as kc, TemporaryDirectory() as td:
+        file = os.path.join(td, 'hist.out')
+        execute(u'a=1', kc=kc)
+        wait_for_idle(kc)
+        execute(u'b=u"abcþ"', kc=kc)
+        wait_for_idle(kc)
+        _, reply = execute("%hist -f " + file, kc=kc)
+        nt.assert_equal(reply['status'], 'ok')
+        with io.open(file, encoding='utf-8') as f:
+            content = f.read()
+        nt.assert_in(u'a=1', content)
+        nt.assert_in(u'b=u"abcþ"', content)
+
 def test_help_output():
     """ipython kernel --help-all works"""
     tt.help_all_output_test('kernel')
+

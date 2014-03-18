@@ -17,7 +17,6 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
-import __builtin__ as builtin_mod
 import __future__
 import abc
 import ast
@@ -29,6 +28,7 @@ import runpy
 import sys
 import tempfile
 import types
+import subprocess
 from io import open as io_open
 
 from IPython.config.configurable import SingletonConfigurable
@@ -41,13 +41,13 @@ from IPython.core import ultratb
 from IPython.core.alias import AliasManager, AliasError
 from IPython.core.autocall import ExitAutocall
 from IPython.core.builtin_trap import BuiltinTrap
+from IPython.core.events import EventManager, available_events
 from IPython.core.compilerop import CachingCompiler, check_linecache_ipython
 from IPython.core.display_trap import DisplayTrap
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import UsageError
 from IPython.core.extensions import ExtensionManager
-from IPython.core.fakemodule import FakeModule, init_fakemod_dict
 from IPython.core.formatters import DisplayFormatter
 from IPython.core.history import HistoryManager
 from IPython.core.inputsplitter import IPythonInputSplitter, ESC_MAGIC, ESC_MAGIC2
@@ -69,6 +69,8 @@ from IPython.utils.ipstruct import Struct
 from IPython.utils.path import get_home_dir, get_ipython_dir, get_py_filename, unquote_filename
 from IPython.utils.pickleshare import PickleShareDB
 from IPython.utils.process import system, getoutput
+from IPython.utils.py3compat import (builtin_mod, unicode_type, string_types,
+                                     with_metaclass, iteritems)
 from IPython.utils.strdispatch import StrDispatch
 from IPython.utils.syspathcontext import prepended_to_syspath
 from IPython.utils.text import (format_screen, LSString, SList,
@@ -130,9 +132,9 @@ def get_default_colors():
 
 
 class SeparateUnicode(Unicode):
-    """A Unicode subclass to validate separate_in, separate_out, etc.
+    r"""A Unicode subclass to validate separate_in, separate_out, etc.
 
-    This is a Unicode based trait that converts '0'->'' and '\\n'->'\n'.
+    This is a Unicode based trait that converts '0'->'' and ``'\\n'->'\n'``.
     """
 
     def validate(self, obj, value):
@@ -185,6 +187,13 @@ class ReadlineNoRecord(object):
         start = max(end-n, 1)
         ghi = self.shell.readline.get_history_item
         return [ghi(x) for x in range(start, end)]
+
+
+@undoc
+class DummyMod(object):
+    """A dummy module used for IPython's interactive module when
+    a namespace must be assigned to the module's __dict__."""
+    pass
 
 #-----------------------------------------------------------------------------
 # Main IPython class
@@ -459,12 +468,12 @@ class InteractiveShell(SingletonConfigurable):
 
         self.init_syntax_highlighting()
         self.init_hooks()
+        self.init_events()
         self.init_pushd_popd_magic()
         # self.init_traceback_handlers use to be here, but we moved it below
         # because it and init_io have to come after init_readline.
         self.init_user_ns()
         self.init_logger()
-        self.init_alias()
         self.init_builtins()
 
         # The following was in post_config_initialization
@@ -496,11 +505,14 @@ class InteractiveShell(SingletonConfigurable):
         self.init_displayhook()
         self.init_latextool()
         self.init_magics()
+        self.init_alias()
         self.init_logstart()
         self.init_pdb()
         self.init_extension_manager()
         self.init_payload()
+        self.init_comms()
         self.hooks.late_startup_hook()
+        self.events.trigger('shell_initialized', self)
         atexit.register(self.atexit_operations)
 
     def get_ipython(self):
@@ -563,13 +575,14 @@ class InteractiveShell(SingletonConfigurable):
 
         # Temporary files used for various purposes.  Deleted at exit.
         self.tempfiles = []
+        self.tempdirs = []
 
         # Keep track of readline usage (later set by init_readline)
         self.has_readline = False
 
         # keep track of where we started running (mainly for crash post-mortem)
         # This is not being used anywhere currently.
-        self.starting_dir = os.getcwdu()
+        self.starting_dir = py3compat.getcwd()
 
         # Indentation management
         self.indent_current_nsp = 0
@@ -707,7 +720,16 @@ class InteractiveShell(SingletonConfigurable):
             # Not in a virtualenv
             return
         
-        if sys.executable.startswith(os.environ['VIRTUAL_ENV']):
+        # venv detection:
+        # stdlib venv may symlink sys.executable, so we can't use realpath.
+        # but others can symlink *to* the venv Python, so we can't just use sys.executable.
+        # So we just check every item in the symlink tree (generally <= 3)
+        p = sys.executable
+        paths = [p]
+        while os.path.islink(p):
+            p = os.path.join(os.path.dirname(p), os.readlink(p))
+            paths.append(p)
+        if any(p.startswith(os.environ['VIRTUAL_ENV']) for p in paths):
             # Running properly in the virtualenv, don't need to do anything
             return
         
@@ -743,7 +765,7 @@ class InteractiveShell(SingletonConfigurable):
     def restore_sys_module_state(self):
         """Restore the state of the sys module."""
         try:
-            for k, v in self._orig_sys_module_state.iteritems():
+            for k, v in iteritems(self._orig_sys_module_state):
                 setattr(sys, k, v)
         except AttributeError:
             pass
@@ -766,9 +788,10 @@ class InteractiveShell(SingletonConfigurable):
         for hook_name in hooks.__all__:
             # default hooks have priority 100, i.e. low; user hooks should have
             # 0-100 priority
-            self.set_hook(hook_name,getattr(hooks,hook_name), 100)
+            self.set_hook(hook_name,getattr(hooks,hook_name), 100, _warn_deprecated=False)
 
-    def set_hook(self,name,hook, priority = 50, str_key = None, re_key = None):
+    def set_hook(self,name,hook, priority=50, str_key=None, re_key=None,
+                 _warn_deprecated=True):
         """set_hook(name,hook) -> sets an internal IPython hook.
 
         IPython exposes some of its internal API as user-modifiable hooks.  By
@@ -797,6 +820,11 @@ class InteractiveShell(SingletonConfigurable):
         if name not in IPython.core.hooks.__all__:
             print("Warning! Hook '%s' is not one of %s" % \
                   (name, IPython.core.hooks.__all__ ))
+
+        if _warn_deprecated and (name in IPython.core.hooks.deprecated):
+            alternative = IPython.core.hooks.deprecated[name]
+            warn("Hook {} is deprecated. Use {} instead.".format(name, alternative))
+
         if not dp:
             dp = IPython.core.hooks.CommandChainDispatcher()
 
@@ -808,26 +836,38 @@ class InteractiveShell(SingletonConfigurable):
 
         setattr(self.hooks,name, dp)
 
+    #-------------------------------------------------------------------------
+    # Things related to events
+    #-------------------------------------------------------------------------
+
+    def init_events(self):
+        self.events = EventManager(self, available_events)
+
     def register_post_execute(self, func):
-        """Register a function for calling after code execution.
+        """DEPRECATED: Use ip.events.register('post_run_cell', func)
+        
+        Register a function for calling after code execution.
         """
-        if not callable(func):
-            raise ValueError('argument %s must be callable' % func)
-        self._post_execute[func] = True
+        warn("ip.register_post_execute is deprecated, use "
+             "ip.events.register('post_run_cell', func) instead.")
+        self.events.register('post_run_cell', func)
     
     #-------------------------------------------------------------------------
     # Things related to the "main" module
     #-------------------------------------------------------------------------
 
-    def new_main_mod(self, filename):
+    def new_main_mod(self, filename, modname):
         """Return a new 'main' module object for user code execution.
         
         ``filename`` should be the path of the script which will be run in the
         module. Requests with the same filename will get the same module, with
         its namespace cleared.
         
+        ``modname`` should be the module name - normally either '__main__' or
+        the basename of the file without the extension.
+        
         When scripts are executed via %run, we must keep a reference to their
-        __main__ module (a FakeModule instance) around so that Python doesn't
+        __main__ module around so that Python doesn't
         clear it, rendering references to module globals useless.
 
         This method keeps said reference in a private dict, keyed by the
@@ -840,9 +880,16 @@ class InteractiveShell(SingletonConfigurable):
         try:
             main_mod = self._main_mod_cache[filename]
         except KeyError:
-            main_mod = self._main_mod_cache[filename] = FakeModule()
+            main_mod = self._main_mod_cache[filename] = types.ModuleType(modname,
+                        doc="Module created for script run in IPython")
         else:
-            init_fakemod_dict(main_mod)
+            main_mod.__dict__.clear()
+            main_mod.__name__ = modname
+        
+        main_mod.__file__ = filename
+        # It seems pydoc (and perhaps others) needs any module instance to
+        # implement a __nonzero__ method
+        main_mod.__nonzero__ = lambda : True
         
         return main_mod
 
@@ -856,7 +903,7 @@ class InteractiveShell(SingletonConfigurable):
 
         In [15]: import IPython
 
-        In [16]: m = _ip.new_main_mod(IPython.__file__)
+        In [16]: m = _ip.new_main_mod(IPython.__file__, 'IPython')
 
         In [17]: len(_ip._main_mod_cache) > 0
         Out[17]: True
@@ -900,9 +947,9 @@ class InteractiveShell(SingletonConfigurable):
         Keywords:
 
           - force(False): by default, this routine checks the instance call_pdb
-          flag and does not actually invoke the debugger if the flag is false.
-          The 'force' option forces the debugger to activate even if the flag
-          is false.
+            flag and does not actually invoke the debugger if the flag is false.
+            The 'force' option forces the debugger to activate even if the flag
+            is false.
         """
 
         if not (force or self.call_pdb):
@@ -970,7 +1017,7 @@ class InteractiveShell(SingletonConfigurable):
 
         # A record of hidden variables we have added to the user namespace, so
         # we can list later only variables defined in actual interactive use.
-        self.user_ns_hidden = set()
+        self.user_ns_hidden = {}
 
         # Now that FakeModule produces a real module, we've run into a nasty
         # problem: after script execution (via %run), the module where the user
@@ -1035,9 +1082,6 @@ class InteractiveShell(SingletonConfigurable):
         """
         if user_module is None and user_ns is not None:
             user_ns.setdefault("__name__", "__main__")
-            class DummyMod(object):
-                "A dummy module used for IPython's interactive namespace."
-                pass
             user_module = DummyMod()
             user_module.__dict__ = user_ns
             
@@ -1107,13 +1151,6 @@ class InteractiveShell(SingletonConfigurable):
         # http://mail.python.org/pipermail/python-dev/2001-April/014068.html
         ns = dict()
         
-        # Put 'help' in the user namespace
-        try:
-            from site import _Helper
-            ns['help'] = _Helper()
-        except ImportError:
-            warn('help() not available - check site.py')
-
         # make global variables for user access to the histories
         ns['_ih'] = self.history_manager.input_hist_parsed
         ns['_oh'] = self.history_manager.output_hist
@@ -1150,7 +1187,7 @@ class InteractiveShell(SingletonConfigurable):
         
         Note that this does not include the displayhook, which also caches
         objects from the output."""
-        return [self.user_ns, self.user_global_ns] + \
+        return [self.user_ns, self.user_global_ns, self.user_ns_hidden] + \
                [m.__dict__ for m in self._main_mod_cache.values()]
 
     def reset(self, new_session=True):
@@ -1227,7 +1264,7 @@ class InteractiveShell(SingletonConfigurable):
             # Also check in output history
             ns_refs.append(self.history_manager.output_hist)
             for ns in ns_refs:
-                to_delete = [n for n, o in ns.iteritems() if o is obj]
+                to_delete = [n for n, o in iteritems(ns) if o is obj]
                 for name in to_delete:
                     del ns[name]
 
@@ -1279,8 +1316,8 @@ class InteractiveShell(SingletonConfigurable):
         # We need a dict of name/value pairs to do namespace updates.
         if isinstance(variables, dict):
             vdict = variables
-        elif isinstance(variables, (basestring, list, tuple)):
-            if isinstance(variables, basestring):
+        elif isinstance(variables, string_types+(list, tuple)):
+            if isinstance(variables, string_types):
                 vlist = variables.split()
             else:
                 vlist = variables
@@ -1301,7 +1338,8 @@ class InteractiveShell(SingletonConfigurable):
         # And configure interactive visibility
         user_ns_hidden = self.user_ns_hidden
         if interactive:
-            user_ns_hidden.difference_update(vdict)
+            for name in vdict:
+                user_ns_hidden.pop(name, None)
         else:
             user_ns_hidden.update(vdict)
     
@@ -1318,10 +1356,10 @@ class InteractiveShell(SingletonConfigurable):
         variables : dict
           A dictionary mapping object names (as strings) to the objects.
         """
-        for name, obj in variables.iteritems():
+        for name, obj in iteritems(variables):
             if name in self.user_ns and self.user_ns[name] is obj:
                 del self.user_ns[name]
-                self.user_ns_hidden.discard(name)
+                self.user_ns_hidden.pop(name, None)
 
     #-------------------------------------------------------------------------
     # Things related to object introspection
@@ -1349,9 +1387,7 @@ class InteractiveShell(SingletonConfigurable):
             namespaces = [ ('Interactive', self.user_ns),
                            ('Interactive (global)', self.user_global_ns),
                            ('Python builtin', builtin_mod.__dict__),
-                           ('Alias', self.alias_manager.alias_table),
                            ]
-            alias_ns = self.alias_manager.alias_table
 
         # initialize results to 'null'
         found = False; obj = None;  ospace = None;  ds = None;
@@ -1390,8 +1426,6 @@ class InteractiveShell(SingletonConfigurable):
                     # If we finish the for loop (no break), we got all members
                     found = True
                     ospace = nsname
-                    if ns == alias_ns:
-                        isalias = True
                     break  # namespace loop
 
         # Try to see if it's magic
@@ -1577,14 +1611,14 @@ class InteractiveShell(SingletonConfigurable):
             msg = "CustomTB must return list of strings, not %r" % stb
             if stb is None:
                 return []
-            elif isinstance(stb, basestring):
+            elif isinstance(stb, string_types):
                 return [stb]
             elif not isinstance(stb, list):
                 raise TypeError(msg)
             # it's a list
             for line in stb:
                 # check every element
-                if not isinstance(line, basestring):
+                if not isinstance(line, string_types):
                     raise TypeError(msg)
             return stb
 
@@ -1926,7 +1960,6 @@ class InteractiveShell(SingletonConfigurable):
         self.Completer = IPCompleter(shell=self,
                                      namespace=self.user_ns,
                                      global_namespace=self.user_global_ns,
-                                     alias_table=self.alias_manager.alias_table,
                                      use_readline=self.has_readline,
                                      parent=self,
                                      )
@@ -2052,11 +2085,11 @@ class InteractiveShell(SingletonConfigurable):
         # should be split into a prompt manager and displayhook. We probably
         # even need a centralize colors management object.
         self.magic('colors %s' % self.colors)
-
+    
     # Defined here so that it's included in the documentation
     @functools.wraps(magic.MagicsManager.register_function)
     def register_magic_function(self, func, magic_kind='line', magic_name=None):
-        self.magics_manager.register_function(func,
+        self.magics_manager.register_function(func, 
                                   magic_kind=magic_kind, magic_name=magic_name)
 
     def run_line_magic(self, magic_name, line):
@@ -2189,7 +2222,7 @@ class InteractiveShell(SingletonConfigurable):
 
         from IPython.core import macro
 
-        if isinstance(themacro, basestring):
+        if isinstance(themacro, string_types):
             themacro = macro.Macro(themacro)
         if not isinstance(themacro, macro.Macro):
             raise ValueError('A macro must be a string or a Macro instance.')
@@ -2223,7 +2256,8 @@ class InteractiveShell(SingletonConfigurable):
         self.user_ns['_exit_code'] = system(self.var_expand(cmd, depth=1))
 
     def system_raw(self, cmd):
-        """Call the given cmd in a subprocess using os.system
+        """Call the given cmd in a subprocess using os.system on Windows or
+        subprocess.call using the system shell on other platforms.
 
         Parameters
         ----------
@@ -2241,11 +2275,10 @@ class InteractiveShell(SingletonConfigurable):
                 ec = os.system(cmd)
         else:
             cmd = py3compat.unicode_to_str(cmd)
-            ec = os.system(cmd)
-            # The high byte is the exit code, the low byte is a signal number
-            # that we discard for now. See the docs for os.wait()
-            if ec > 255:
-                ec >>= 8
+            # Call the cmd using the OS shell, instead of the default /bin/sh, if set.
+            ec = subprocess.call(cmd, shell=True, executable=os.environ.get('SHELL', None))
+            # exit code is positive for program failure, or negative for
+            # terminating signal number.
         
         # We explicitly do NOT return the subprocess status code, because
         # a non-None value would trigger :func:`sys.displayhook` calls.
@@ -2291,7 +2324,6 @@ class InteractiveShell(SingletonConfigurable):
     def init_alias(self):
         self.alias_manager = AliasManager(shell=self, parent=self)
         self.configurables.append(self.alias_manager)
-        self.ns_table['alias'] = self.alias_manager.alias_table,
 
     #-------------------------------------------------------------------------
     # Things related to extensions
@@ -2308,7 +2340,15 @@ class InteractiveShell(SingletonConfigurable):
     def init_payload(self):
         self.payload_manager = PayloadManager(parent=self)
         self.configurables.append(self.payload_manager)
-
+    
+    #-------------------------------------------------------------------------
+    # Things related to widgets
+    #-------------------------------------------------------------------------
+    
+    def init_comms(self):
+        # not implemented in the base class
+        pass
+    
     #-------------------------------------------------------------------------
     # Things related to the prefilter
     #-------------------------------------------------------------------------
@@ -2365,7 +2405,7 @@ class InteractiveShell(SingletonConfigurable):
         exc_info = {
             u'status' : 'error',
             u'traceback' : stb,
-            u'ename' : unicode(etype.__name__),
+            u'ename' : unicode_type(etype.__name__),
             u'evalue' : py3compat.safe_unicode(evalue),
         }
 
@@ -2428,7 +2468,7 @@ class InteractiveShell(SingletonConfigurable):
         user_ns = self.user_ns
         global_ns = self.user_global_ns
         
-        for key, expr in expressions.iteritems():
+        for key, expr in iteritems(expressions):
             try:
                 value = self._format_user_obj(eval(expr, global_ns, user_ns))
             except:
@@ -2443,7 +2483,7 @@ class InteractiveShell(SingletonConfigurable):
     def ex(self, cmd):
         """Execute a normal python statement in user namespace."""
         with self.builtin_trap:
-            exec cmd in self.user_global_ns, self.user_ns
+            exec(cmd, self.user_global_ns, self.user_ns)
 
     def ev(self, expr):
         """Evaluate python expression expr in user namespace.
@@ -2512,16 +2552,17 @@ class InteractiveShell(SingletonConfigurable):
             except:
                 if kw['raise_exceptions']:
                     raise
-                self.showtraceback()
+                # tb offset is 2 because we wrap execfile
+                self.showtraceback(tb_offset=2)
 
     def safe_execfile_ipy(self, fname):
-        """Like safe_execfile, but for .ipy files with IPython syntax.
+        """Like safe_execfile, but for .ipy or .ipynb files with IPython syntax.
 
         Parameters
         ----------
         fname : str
             The name of the file to execute.  The filename must have a
-            .ipy extension.
+            .ipy or .ipynb extension.
         """
         fname = os.path.abspath(os.path.expanduser(fname))
 
@@ -2537,15 +2578,30 @@ class InteractiveShell(SingletonConfigurable):
         # behavior of running a script from the system command line, where
         # Python inserts the script's directory into sys.path
         dname = os.path.dirname(fname)
+        
+        def get_cells():
+            """generator for sequence of code blocks to run"""
+            if fname.endswith('.ipynb'):
+                from IPython.nbformat import current
+                with open(fname) as f:
+                    nb = current.read(f, 'json')
+                    if not nb.worksheets:
+                        return
+                    for cell in nb.worksheets[0].cells:
+                        if cell.cell_type == 'code':
+                            yield cell.input
+            else:
+                with open(fname) as f:
+                    yield f.read()
 
         with prepended_to_syspath(dname):
             try:
-                with open(fname) as thefile:
+                for cell in get_cells():
                     # self.run_cell currently captures all exceptions
                     # raised in user code.  It would be nice if there were
-                    # versions of runlines, execfile that did raise, so
+                    # versions of run_cell that did raise, so
                     # we could catch the errors.
-                    self.run_cell(thefile.read(), store_history=False, shell_futures=False)
+                    self.run_cell(cell, store_history=False, shell_futures=False)
             except:
                 self.showtraceback()
                 warn('Unknown failure executing file: <%s>' % fname)
@@ -2611,8 +2667,46 @@ class InteractiveShell(SingletonConfigurable):
         if silent:
             store_history = False
 
-        self.input_transformer_manager.push(raw_cell)
-        cell = self.input_transformer_manager.source_reset()
+        self.events.trigger('pre_execute')
+        if not silent:
+            self.events.trigger('pre_run_cell')
+
+        # If any of our input transformation (input_transformer_manager or
+        # prefilter_manager) raises an exception, we store it in this variable
+        # so that we can display the error after logging the input and storing
+        # it in the history.
+        preprocessing_exc_tuple = None
+        try:
+            # Static input transformations
+            cell = self.input_transformer_manager.transform_cell(raw_cell)
+        except SyntaxError:
+            preprocessing_exc_tuple = sys.exc_info()
+            cell = raw_cell  # cell has to exist so it can be stored/logged
+        else:
+            if len(cell.splitlines()) == 1:
+                # Dynamic transformations - only applied for single line commands
+                with self.builtin_trap:
+                    try:
+                        # use prefilter_lines to handle trailing newlines
+                        # restore trailing newline for ast.parse
+                        cell = self.prefilter_manager.prefilter_lines(cell) + '\n'
+                    except Exception:
+                        # don't allow prefilter errors to crash IPython
+                        preprocessing_exc_tuple = sys.exc_info()
+
+        # Store raw and processed history
+        if store_history:
+            self.history_manager.store_inputs(self.execution_count,
+                                              cell, raw_cell)
+        if not silent:
+            self.logger.log(cell, raw_cell)
+
+        # Display the exception if input processing failed.
+        if preprocessing_exc_tuple is not None:
+            self.showtraceback(preprocessing_exc_tuple)
+            if store_history:
+                self.execution_count += 1
+            return
 
         # Our own compiler remembers the __future__ environment. If we want to
         # run code with a separate __future__ environment, use the default
@@ -2620,73 +2714,35 @@ class InteractiveShell(SingletonConfigurable):
         compiler = self.compile if shell_futures else CachingCompiler()
 
         with self.builtin_trap:
-            prefilter_failed = False
-            if len(cell.splitlines()) == 1:
+            cell_name = self.compile.cache(cell, self.execution_count)
+
+            with self.display_trap:
+                # Compile to bytecode
                 try:
-                    # use prefilter_lines to handle trailing newlines
-                    # restore trailing newline for ast.parse
-                    cell = self.prefilter_manager.prefilter_lines(cell) + '\n'
-                except AliasError as e:
-                    error(e)
-                    prefilter_failed = True
-                except Exception:
-                    # don't allow prefilter errors to crash IPython
-                    self.showtraceback()
-                    prefilter_failed = True
+                    code_ast = compiler.ast_parse(cell, filename=cell_name)
+                except IndentationError:
+                    self.showindentationerror()
+                    if store_history:
+                        self.execution_count += 1
+                    return None
+                except (OverflowError, SyntaxError, ValueError, TypeError,
+                        MemoryError):
+                    self.showsyntaxerror()
+                    if store_history:
+                        self.execution_count += 1
+                    return None
 
-            # Store raw and processed history
-            if store_history:
-                self.history_manager.store_inputs(self.execution_count,
-                                                  cell, raw_cell)
-            if not silent:
-                self.logger.log(cell, raw_cell)
+                # Apply AST transformations
+                code_ast = self.transform_ast(code_ast)
 
-            if not prefilter_failed:
-                # don't run if prefilter failed
-                cell_name = self.compile.cache(cell, self.execution_count)
-
-                with self.display_trap:
-                    try:
-                        code_ast = compiler.ast_parse(cell, filename=cell_name)
-                    except IndentationError:
-                        self.showindentationerror()
-                        if store_history:
-                            self.execution_count += 1
-                        return None
-                    except (OverflowError, SyntaxError, ValueError, TypeError,
-                            MemoryError):
-                        self.showsyntaxerror()
-                        if store_history:
-                            self.execution_count += 1
-                        return None
-                    
-                    code_ast = self.transform_ast(code_ast)
-                    
-                    interactivity = "none" if silent else self.ast_node_interactivity
-                    self.run_ast_nodes(code_ast.body, cell_name,
-                                       interactivity=interactivity, compiler=compiler)
-                    
-                    # Execute any registered post-execution functions.
-                    # unless we are silent
-                    post_exec = [] if silent else self._post_execute.iteritems()
-                    
-                    for func, status in post_exec:
-                        if self.disable_failing_post_execute and not status:
-                            continue
-                        try:
-                            func()
-                        except KeyboardInterrupt:
-                            print("\nKeyboardInterrupt", file=io.stderr)
-                        except Exception:
-                            # register as failing:
-                            self._post_execute[func] = False
-                            self.showtraceback()
-                            print('\n'.join([
-                                "post-execution function %r produced an error." % func,
-                                "If this problem persists, you can disable failing post-exec functions with:",
-                                "",
-                                "    get_ipython().disable_failing_post_execute = True"
-                            ]), file=io.stderr)
+                # Execute the user code
+                interactivity = "none" if silent else self.ast_node_interactivity
+                self.run_ast_nodes(code_ast.body, cell_name,
+                                   interactivity=interactivity, compiler=compiler)
+                
+                self.events.trigger('post_execute')
+                if not silent:
+                    self.events.trigger('post_run_cell')
 
         if store_history:
             # Write output to the database. Does nothing unless
@@ -2824,7 +2880,7 @@ class InteractiveShell(SingletonConfigurable):
             try:
                 self.hooks.pre_run_code_hook()
                 #rprint('Running code', repr(code_obj)) # dbg
-                exec code_obj in self.user_global_ns, self.user_ns
+                exec(code_obj, self.user_global_ns, self.user_ns)
             finally:
                 # Reset our crash handler in place
                 sys.excepthook = old_excepthook
@@ -2967,15 +3023,19 @@ class InteractiveShell(SingletonConfigurable):
     def mktempfile(self, data=None, prefix='ipython_edit_'):
         """Make a new tempfile and return its filename.
 
-        This makes a call to tempfile.mktemp, but it registers the created
-        filename internally so ipython cleans it up at exit time.
+        This makes a call to tempfile.mkstemp (created in a tempfile.mkdtemp),
+        but it registers the created filename internally so ipython cleans it up
+        at exit time.
 
         Optional inputs:
 
           - data(None): if data is given, it gets written out to the temp file
-          immediately, and the file is closed again."""
+            immediately, and the file is closed again."""
 
-        filename = tempfile.mktemp('.py', prefix)
+        dirname = tempfile.mkdtemp(prefix=prefix)
+        self.tempdirs.append(dirname)
+
+        handle, filename = tempfile.mkstemp('.py', prefix, dir=dirname)
         self.tempfiles.append(filename)
 
         if data:
@@ -3014,15 +3074,18 @@ class InteractiveShell(SingletonConfigurable):
             arguments as strings. The number before the / is the session
             number: ~n goes n back from the current session.
 
-        Optional Parameters:
-          - raw(False): by default, the processed input is used.  If this is
-          true, the raw input history is used instead.
+        raw : bool, optional
+            By default, the processed input is used.  If this is true, the raw
+            input history is used instead.
 
-        Note that slices can be called with two notations:
+        Notes
+        -----
 
-        N:M -> standard python form, means including items N...(M-1).
+        Slices can be described with two notations:
 
-        N-M -> include items N..M (closed endpoint)."""
+        * ``N:M`` -> standard python form, means including items N...(M-1).
+        * ``N-M`` -> include items N..M (closed endpoint).
+        """
         lines = self.history_manager.get_range_by_str(range_str, raw=raw)
         return "\n".join(x for _, _, x in lines)
 
@@ -3066,7 +3129,11 @@ class InteractiveShell(SingletonConfigurable):
                 return openpy.read_py_url(utarget, skip_encoding_cookie=skip_encoding_cookie)
         except UnicodeDecodeError:
             if not py_only :
-                from urllib import urlopen  # Deferred import
+                # Deferred import
+                try:
+                    from urllib.request import urlopen  # Py3
+                except ImportError:
+                    from urllib import urlopen
                 response = urlopen(target)
                 return response.read().decode('latin1')
             raise ValueError(("'%s' seem to be unreadable.") % utarget)
@@ -3094,7 +3161,7 @@ class InteractiveShell(SingletonConfigurable):
         except Exception:
             raise ValueError(("'%s' was not found in history, as a file, url, "
                                 "nor in the user namespace.") % target)
-        if isinstance(codeobj, basestring):
+        if isinstance(codeobj, string_types):
             return codeobj
         elif isinstance(codeobj, Macro):
             return codeobj.value
@@ -3121,10 +3188,16 @@ class InteractiveShell(SingletonConfigurable):
         # history db
         self.history_manager.end_session()
 
-        # Cleanup all tempfiles left around
+        # Cleanup all tempfiles and folders left around
         for tfile in self.tempfiles:
             try:
                 os.unlink(tfile)
+            except OSError:
+                pass
+
+        for tdir in self.tempdirs:
+            try:
+                os.rmdir(tdir)
             except OSError:
                 pass
 
@@ -3138,8 +3211,7 @@ class InteractiveShell(SingletonConfigurable):
         self.restore_sys_module_state()
 
 
-class InteractiveShellABC(object):
+class InteractiveShellABC(with_metaclass(abc.ABCMeta, object)):
     """An abstract base class for InteractiveShell."""
-    __metaclass__ = abc.ABCMeta
 
 InteractiveShellABC.register(InteractiveShell)

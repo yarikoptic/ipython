@@ -18,6 +18,8 @@ try:
     import ctypes
 except ImportError:
     ctypes = None
+except SystemError: # IronPython issue, 2/8/2014
+    ctypes = None
 import os
 import sys
 from distutils.version import LooseVersion as V
@@ -320,8 +322,11 @@ class InputHookManager(object):
         """
         self._current_gui = GUI_TK
         if app is None:
-            import Tkinter
-            app = Tkinter.Tk()
+            try:
+                from tkinter import Tk  # Py 3
+            except ImportError:
+                from Tkinter import Tk  # Py 2
+            app = Tk()
             app.withdraw()
             self._apps[GUI_TK] = app
             return app

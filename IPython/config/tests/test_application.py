@@ -189,4 +189,5 @@ class TestApplication(TestCase):
     def test_unicode_argv(self):
         app = MyApp()
         app.parse_command_line(['ünîcødé'])
+        
 

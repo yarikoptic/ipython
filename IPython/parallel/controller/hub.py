@@ -30,8 +30,9 @@ from zmq.eventloop.zmqstream import ZMQStream
 
 # internal:
 from IPython.utils.importstring import import_item
-from IPython.utils.localinterfaces import LOCALHOST
-from IPython.utils.py3compat import cast_bytes
+from IPython.utils.jsonutil import extract_dates
+from IPython.utils.localinterfaces import localhost
+from IPython.utils.py3compat import cast_bytes, unicode_type, iteritems
 from IPython.utils.traitlets import (
         HasTraits, Instance, Integer, Unicode, Dict, Set, Tuple, CBytes, DottedObjectName
         )
@@ -177,20 +178,25 @@ class HubFactory(RegistrationFactory):
     def _notifier_port_default(self):
         return util.select_random_ports(1)[0]
 
-    engine_ip = Unicode(LOCALHOST, config=True,
+    engine_ip = Unicode(config=True,
         help="IP on which to listen for engine connections. [default: loopback]")
+    def _engine_ip_default(self):
+        return localhost()
     engine_transport = Unicode('tcp', config=True,
         help="0MQ transport for engine connections. [default: tcp]")
 
-    client_ip = Unicode(LOCALHOST, config=True,
+    client_ip = Unicode(config=True,
         help="IP on which to listen for client connections. [default: loopback]")
     client_transport = Unicode('tcp', config=True,
         help="0MQ transport for client connections. [default : tcp]")
 
-    monitor_ip = Unicode(LOCALHOST, config=True,
+    monitor_ip = Unicode(config=True,
         help="IP on which to listen for monitor messages. [default: loopback]")
     monitor_transport = Unicode('tcp', config=True,
         help="0MQ transport for monitor messages. [default : tcp]")
+
+    _client_ip_default = _monitor_ip_default = _engine_ip_default
+
 
     monitor_url = Unicode('')
 
@@ -205,6 +211,17 @@ class HubFactory(RegistrationFactory):
         NoDB    : disable database altogether (default)
         
         """)
+
+    registration_timeout = Integer(0, config=True,
+        help="Engine registration timeout in seconds [default: max(30,"
+             "10*heartmonitor.period)]" )
+    
+    def _registration_timeout_default(self):
+        if self.heartmonitor is None:
+            # early initialization, this value will be ignored
+            return 0
+            # heartmonitor period is in milliseconds, so 10x in seconds is .01
+        return max(30, int(.01 * self.heartmonitor.period))
 
     # not configurable
     db = Instance('IPython.parallel.controller.dictdb.BaseDB')
@@ -250,10 +267,9 @@ class HubFactory(RegistrationFactory):
 
         ctx = self.context
         loop = self.loop
-
-        try:
+        if 'TaskScheduler.scheme_name' in self.config:
             scheme = self.config.TaskScheduler.scheme_name
-        except AttributeError:
+        else:
             from .scheduler import TaskScheduler
             scheme = TaskScheduler.scheme_name.get_default_value()
         
@@ -332,10 +348,13 @@ class HubFactory(RegistrationFactory):
         url = util.disambiguate_url(self.client_url('task'))
         r.connect(url)
 
+        # convert seconds to msec
+        registration_timeout = 1000*self.registration_timeout
+
         self.hub = Hub(loop=loop, session=self.session, monitor=sub, heartmonitor=self.heartmonitor,
                 query=q, notifier=n, resubmit=r, db=self.db,
                 engine_info=self.engine_info, client_info=self.client_info,
-                log=self.log)
+                log=self.log, registration_timeout=registration_timeout)
 
 
 class Hub(SessionFactory):
@@ -405,7 +424,6 @@ class Hub(SessionFactory):
         """
 
         super(Hub, self).__init__(**kwargs)
-        self.registration_timeout = max(10000, 5*self.heartmonitor.period)
 
         # register our callbacks
         self.query.on_recv(self.dispatch_query)
@@ -451,7 +469,7 @@ class Hub(SessionFactory):
         self._idcounter += 1
         return newid
         # newid = 0
-        # incoming = [id[0] for id in self.incoming_registrations.itervalues()]
+        # incoming = [id[0] for id in itervalues(self.incoming_registrations)]
         # # print newid, self.ids, self.incoming_registrations
         # while newid in self.ids or newid in incoming:
         #     newid += 1
@@ -467,13 +485,13 @@ class Hub(SessionFactory):
             # default to all
             return self.ids
 
-        if isinstance(targets, (int,str,unicode)):
+        if isinstance(targets, (int,str,unicode_type)):
             # only one target specified
             targets = [targets]
         _targets = []
         for t in targets:
             # map raw identities to ids
-            if isinstance(t, (str,unicode)):
+            if isinstance(t, (str,unicode_type)):
                 t = self.by_ident.get(cast_bytes(t), t)
             _targets.append(t)
         targets = _targets
@@ -607,7 +625,7 @@ class Hub(SessionFactory):
         try:
             # it's posible iopub arrived first:
             existing = self.db.get_record(msg_id)
-            for key,evalue in existing.iteritems():
+            for key,evalue in iteritems(existing):
                 rvalue = record.get(key, None)
                 if evalue and rvalue and evalue != rvalue:
                     self.log.warn("conflicting initial state for record: %r:%r <%r> %r", msg_id, rvalue, key, evalue)
@@ -664,7 +682,7 @@ class Hub(SessionFactory):
         rheader = msg['header']
         md = msg['metadata']
         completed = rheader['date']
-        started = md.get('started', None)
+        started = extract_dates(md.get('started', None))
         result = {
             'result_header' : rheader,
             'result_metadata': md,
@@ -713,7 +731,7 @@ class Hub(SessionFactory):
                     # still check content,header which should not change
                     # but are not expensive to compare as buffers
 
-            for key,evalue in existing.iteritems():
+            for key,evalue in iteritems(existing):
                 if key.endswith('buffers'):
                     # don't compare buffers
                     continue
@@ -770,7 +788,7 @@ class Hub(SessionFactory):
                 if msg_id in self.tasks[eid]:
                     self.tasks[eid].remove(msg_id)
             completed = header['date']
-            started = md.get('started', None)
+            started = extract_dates(md.get('started', None))
             result = {
                 'result_header' : header,
                 'result_metadata': msg['metadata'],
@@ -888,7 +906,7 @@ class Hub(SessionFactory):
         self.log.info("client::client %r connected", client_id)
         content = dict(status='ok')
         jsonable = {}
-        for k,v in self.keytable.iteritems():
+        for k,v in iteritems(self.keytable):
             if v not in self.dead_engines:
                 jsonable[str(k)] = v
         content['engines'] = jsonable
@@ -916,7 +934,7 @@ class Hub(SessionFactory):
                 content = error.wrap_exception()
                 self.log.error("uuid %r in use", uuid, exc_info=True)
         else:
-            for h, ec in self.incoming_registrations.iteritems():
+            for h, ec in iteritems(self.incoming_registrations):
                 if uuid == h:
                     try:
                         raise KeyError("heart_id %r in use" % uuid)
@@ -1069,7 +1087,7 @@ class Hub(SessionFactory):
         self.log.debug("save engine state to %s" % self.engine_state_file)
         state = {}
         engines = {}
-        for eid, ec in self.engines.iteritems():
+        for eid, ec in iteritems(self.engines):
             if ec.uuid not in self.dead_engines:
                 engines[eid] = ec.uuid
         
@@ -1093,7 +1111,7 @@ class Hub(SessionFactory):
         
         save_notifier = self.notifier
         self.notifier = None
-        for eid, uuid in state['engines'].iteritems():
+        for eid, uuid in iteritems(state['engines']):
             heart = uuid.encode('ascii')
             # start with this heart as current and beating:
             self.heartmonitor.responses.add(heart)
@@ -1144,11 +1162,15 @@ class Hub(SessionFactory):
 
     def queue_status(self, client_id, msg):
         """Return the Queue status of one or more targets.
-        if verbose: return the msg_ids
-        else: return len of each type.
-        keys: queue (pending MUX jobs)
-            tasks (pending Task jobs)
-            completed (finished jobs from both queues)"""
+
+        If verbose, return the msg_ids, else return len of each type.
+
+        Keys:
+
+        * queue (pending MUX jobs)
+        * tasks (pending Task jobs)
+        * completed (finished jobs from both queues)
+        """
         content = msg['content']
         targets = content['targets']
         try:
@@ -1185,18 +1207,21 @@ class Hub(SessionFactory):
                 self.db.drop_matching_records(dict(completed={'$ne':None}))
             except Exception:
                 reply = error.wrap_exception()
+                self.log.exception("Error dropping records")
         else:
-            pending = filter(lambda m: m in self.pending, msg_ids)
+            pending = [m for m in msg_ids if (m in self.pending)]
             if pending:
                 try:
                     raise IndexError("msg pending: %r" % pending[0])
                 except:
                     reply = error.wrap_exception()
+                    self.log.exception("Error dropping records")
             else:
                 try:
                     self.db.drop_matching_records(dict(msg_id={'$in':msg_ids}))
                 except Exception:
                     reply = error.wrap_exception()
+                    self.log.exception("Error dropping records")
 
             if reply['status'] == 'ok':
                 eids = content.get('engine_ids', [])
@@ -1206,12 +1231,14 @@ class Hub(SessionFactory):
                             raise IndexError("No such engine: %i" % eid)
                         except:
                             reply = error.wrap_exception()
+                            self.log.exception("Error dropping records")
                         break
                     uid = self.engines[eid].uuid
                     try:
                         self.db.drop_matching_records(dict(engine_uuid=uid, completed={'$ne':None}))
                     except Exception:
                         reply = error.wrap_exception()
+                        self.log.exception("Error dropping records")
                         break
 
         self.session.send(self.query, 'purge_reply', content=reply, ident=client_id)
@@ -1239,12 +1266,14 @@ class Hub(SessionFactory):
                 raise RuntimeError("DB appears to be in an inconsistent state."
                     "More matching records were found than should exist")
             except Exception:
+                self.log.exception("Failed to resubmit task")
                 return finish(error.wrap_exception())
         elif len(records) < len(msg_ids):
             missing = [ m for m in msg_ids if m not in found_ids ]
             try:
                 raise KeyError("No such msg(s): %r" % missing)
             except KeyError:
+                self.log.exception("Failed to resubmit task")
                 return finish(error.wrap_exception())
         elif pending_ids:
             pass
@@ -1286,7 +1315,7 @@ class Hub(SessionFactory):
         finish(dict(status='ok', resubmitted=resubmitted))
         
         # store the new IDs in the Task DB
-        for msg_id, resubmit_id in resubmitted.iteritems():
+        for msg_id, resubmit_id in iteritems(resubmitted):
             try:
                 self.db.update_record(msg_id, {'resubmitted' : resubmit_id})
             except Exception:
@@ -1308,7 +1337,7 @@ class Hub(SessionFactory):
             'io' : io_dict,
         }
         if rec['result_buffers']:
-            buffers = map(bytes, rec['result_buffers'])
+            buffers = list(map(bytes, rec['result_buffers']))
         else:
             buffers = []
 
@@ -1334,6 +1363,7 @@ class Hub(SessionFactory):
                     records[rec['msg_id']] = rec
             except Exception:
                 content = error.wrap_exception()
+                self.log.exception("Failed to get results")
                 self.session.send(self.query, "result_reply", content=content,
                                                     parent=msg, ident=client_id)
                 return
@@ -1372,6 +1402,7 @@ class Hub(SessionFactory):
             msg_ids = self.db.get_history()
         except Exception as e:
             content = error.wrap_exception()
+            self.log.exception("Failed to get history")
         else:
             content = dict(status='ok', history=msg_ids)
 
@@ -1381,7 +1412,7 @@ class Hub(SessionFactory):
     def db_query(self, client_id, msg):
         """Perform a raw query on the task record database."""
         content = msg['content']
-        query = content.get('query', {})
+        query = extract_dates(content.get('query', {}))
         keys = content.get('keys', None)
         buffers = []
         empty = list()
@@ -1389,6 +1420,7 @@ class Hub(SessionFactory):
             records = self.db.find_records(query, keys)
         except Exception as e:
             content = error.wrap_exception()
+            self.log.exception("DB query failed")
         else:
             # extract buffers from reply content:
             if keys is not None:

@@ -147,9 +147,11 @@ class TestOutputs(TestCase):
 
     def test_b64b6tes_png(self):
         out = new_output(output_png=b'iVBORw0KG')
-
+    
     def test_binary_jpeg(self):
         out = new_output(output_jpeg=b'\xff\xd8')
 
     def test_b64b6tes_jpeg(self):
         out = new_output(output_jpeg=b'/9')
+        
+

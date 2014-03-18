@@ -8,6 +8,8 @@ div#pager_splitter {
 }
 
 div#pager {
+    font-size: @notebook_font_size;
+    line-height: @notebook_line_height;
     overflow: auto;
     display: none;
 
@@ -16,6 +18,6 @@ div#pager {
       line-height: @code_line_height;
       color: @textColor;
       background-color: @cell_background;
-      padding: 0.4em;
+      padding: @code_padding;
     }
 }

@@ -5,6 +5,160 @@ Authors : MinRK, gregcaporaso, dannystaple
 from os.path import exists, isfile, splitext, abspath, join, isdir
 from os import walk, sep
 
+from IPython.core.display import DisplayObject
+
+
+class Audio(DisplayObject):
+    """Create an audio object.
+
+    When this object is returned by an input cell or passed to the
+    display function, it will result in Audio controls being displayed
+    in the frontend (only works in the notebook).
+    
+    Parameters
+    ----------
+    data : numpy array, list, unicode, str or bytes
+        Can be a
+        * Numpy 1d array containing the desired waveform (mono)
+        * List of float or integer representing the waveform (mono)
+        * String containing the filename
+        * Bytestring containing raw PCM data or
+        * URL pointing to a file on the web. 
+        
+        If the array option is used the waveform will be normalized.
+        
+        If a filename or url is used the format support will be browser 
+        dependent. 
+    url : unicode
+        A URL to download the data from.
+    filename : unicode
+        Path to a local file to load the data from.
+    embed : boolean
+        Should the image data be embedded using a data URI (True) or should
+        the original source be referenced. Set this to True if you want the 
+        audio to playable later with no internet connection in the notebook.
+
+        Default is `True`, unless the keyword argument `url` is set, then
+        default value is `False`.
+    rate : integer
+        The sampling rate of the raw data.
+        Only required when data parameter is being used as an array
+    autoplay : bool
+        Set to True if the audio should immediately start playing.
+        Default is `False`.
+
+    Examples
+    --------
+    ::
+
+        # Generate a sound
+        import numpy as np
+        framerate = 44100
+        t = np.linspace(0,5,framerate*5)
+        data = np.sin(2*np.pi*220*t) + np.sin(2*np.pi*224*t))
+        Audio(data,rate=framerate)
+
+        Audio("http://www.nch.com.au/acm/8k16bitpcm.wav")  # From URL
+        Audio(url="http://www.w3schools.com/html/horse.ogg")
+
+        Audio('/path/to/sound.wav')  # From file
+        Audio(filename='/path/to/sound.ogg')
+
+        Audio(b'RAW_WAV_DATA..)  # From bytes
+        Audio(data=b'RAW_WAV_DATA..)
+
+    """
+    _read_flags = 'rb'
+
+    def __init__(self, data=None, filename=None, url=None, embed=None, rate=None, autoplay=False):
+        if filename is None and url is None and data is None:
+            raise ValueError("No image data found. Expecting filename, url, or data.")
+        if embed is False and url is None:
+            raise ValueError("No url found. Expecting url when embed=False")
+            
+        if url is not None and embed is not True:
+            self.embed = False
+        else:
+            self.embed = True
+        self.autoplay = autoplay
+        super(Audio, self).__init__(data=data, url=url, filename=filename)
+            
+        if self.data is not None and not isinstance(self.data, bytes):
+            self.data = self._make_wav(data,rate)
+            
+    def reload(self):
+        """Reload the raw data from file or URL."""
+        import mimetypes
+        if self.embed:
+            super(Audio, self).reload()
+
+        if self.filename is not None:
+            self.mimetype = mimetypes.guess_type(self.filename)[0]
+        elif self.url is not None:
+            self.mimetype = mimetypes.guess_type(self.url)[0]
+        else:
+            self.mimetype = "audio/wav"
+           
+    def _make_wav(self, data, rate):
+        """ Transform a numpy array to a PCM bytestring """
+        import struct
+        from io import BytesIO
+        import wave
+        try:
+            import numpy as np
+            data = np.array(data,dtype=float)
+            if len(data.shape) > 1:
+                raise ValueError("encoding of stereo PCM signals are unsupported")  
+            scaled = np.int16(data/np.max(np.abs(data))*32767).tolist()
+        except ImportError:
+            maxabsvalue = float(max([abs(x) for x in data]))
+            scaled = [int(x/maxabsvalue*32767) for x in data] 
+        fp = BytesIO()
+        waveobj = wave.open(fp,mode='wb')
+        waveobj.setnchannels(1)
+        waveobj.setframerate(rate)
+        waveobj.setsampwidth(2)
+        waveobj.setcomptype('NONE','NONE')
+        waveobj.writeframes(b''.join([struct.pack('<h',x) for x in scaled]))
+        val = fp.getvalue()
+        waveobj.close()
+        return val 
+    
+    def _data_and_metadata(self):
+        """shortcut for returning metadata with url information, if defined"""
+        md = {}
+        if self.url:
+            md['url'] = self.url
+        if md:
+            return self.data, md
+        else:
+            return self.data
+        
+    def _repr_html_(self):
+        src = """
+                <audio controls="controls" {autoplay}>
+                    <source src="{src}" type="{type}" />
+                    Your browser does not support the audio element.
+                </audio>
+              """
+        return src.format(src=self.src_attr(),type=self.mimetype, autoplay=self.autoplay_attr())
+
+    def src_attr(self):
+        import base64
+        if self.embed and (self.data is not None):
+            data = base64=base64.b64encode(self.data).decode('ascii')
+            return """data:{type};base64,{base64}""".format(type=self.mimetype,
+                                                            base64=data)
+        elif self.url is not None:
+            return self.url
+        else:
+            return ""
+
+    def autoplay_attr(self):
+        if(self.autoplay):
+            return 'autoplay="autoplay"'
+        else:
+            return ''
 
 class IFrame(object):
     """
@@ -30,7 +184,10 @@ class IFrame(object):
     def _repr_html_(self):
         """return the embed iframe"""
         if self.params:
-            from urllib import urlencode
+            try:
+                from urllib.parse import urlencode # Py 3
+            except ImportError:
+                from urllib import urlencode
             params = "?" + urlencode(self.params)
         else:
             params = ""
@@ -42,29 +199,28 @@ class IFrame(object):
 class YouTubeVideo(IFrame):
     """Class for embedding a YouTube Video in an IPython session, based on its video id.
 
-    e.g. to embed the video on this page:
+    e.g. to embed the video from https://www.youtube.com/watch?v=foo , you would
+    do::
 
-    http://www.youtube.com/watch?v=foo
+        vid = YouTubeVideo("foo")
+        display(vid)
 
-    you would do:
+    To start from 30 seconds::
 
-    vid = YouTubeVideo("foo")
-    display(vid)
+        vid = YouTubeVideo("abc", start=30)
+        display(vid)
 
-    To start from 30 seconds:
+    To calculate seconds from time as hours, minutes, seconds use
+    :class:`datetime.timedelta`::
 
-    vid = YouTubeVideo("abc", start=30)
-    display(vid)
-
-    To calculate seconds from time as hours, minutes, seconds use:
-    start=int(timedelta(hours=1, minutes=46, seconds=40).total_seconds())
+        start=int(timedelta(hours=1, minutes=46, seconds=40).total_seconds())
 
     Other parameters can be provided as documented at
     https://developers.google.com/youtube/player_parameters#parameter-subheader
     """
 
     def __init__(self, id, width=400, height=300, **kwargs):
-        src = "http://www.youtube.com/embed/{0}".format(id)
+        src = "https://www.youtube.com/embed/{0}".format(id)
         super(YouTubeVideo, self).__init__(src, width, height, **kwargs)
 
 class VimeoVideo(IFrame):
@@ -73,7 +229,7 @@ class VimeoVideo(IFrame):
     """
 
     def __init__(self, id, width=400, height=300, **kwargs):
-        src="http://player.vimeo.com/video/{0}".format(id)
+        src="https://player.vimeo.com/video/{0}".format(id)
         super(VimeoVideo, self).__init__(src, width, height, **kwargs)
 
 class ScribdDocument(IFrame):
@@ -89,7 +245,7 @@ class ScribdDocument(IFrame):
     """
 
     def __init__(self, id, width=400, height=300, **kwargs):
-        src="http://www.scribd.com/embeds/{0}/content".format(id)
+        src="https://www.scribd.com/embeds/{0}/content".format(id)
         super(ScribdDocument, self).__init__(src, width, height, **kwargs)
 
 class FileLink(object):
@@ -111,7 +267,7 @@ class FileLink(object):
 
     def __init__(self,
                  path,
-                 url_prefix='files/',
+                 url_prefix='',
                  result_html_prefix='',
                  result_html_suffix='<br>'):
         """
@@ -128,8 +284,7 @@ class FileLink(object):
             text to append at the end of link [default: '<br>']
         """
         if isdir(path):
-            raise ValueError,\
-             ("Cannot display a directory using FileLink. "
+            raise ValueError("Cannot display a directory using FileLink. "
               "Use FileLinks to display '%s'." % path)
         self.path = path
         self.url_prefix = url_prefix
@@ -161,61 +316,61 @@ class FileLink(object):
 class FileLinks(FileLink):
     """Class for embedding local file links in an IPython session, based on path
 
-    e.g. to embed links to files that were generated in the IPython notebook under my/data
+    e.g. to embed links to files that were generated in the IPython notebook
+    under ``my/data``, you would do::
 
-    you would do:
+        local_files = FileLinks("my/data")
+        display(local_files)
 
-    local_files = FileLinks("my/data")
-    display(local_files)
+    or in the HTML notebook, just::
 
-    or in the HTML notebook, just
-
-    FileLinks("my/data")
-
+        FileLinks("my/data")
     """
     def __init__(self,
                  path,
-                 url_prefix='files/',
+                 url_prefix='',
                  included_suffixes=None,
                  result_html_prefix='',
                  result_html_suffix='<br>',
                  notebook_display_formatter=None,
                  terminal_display_formatter=None):
         """
-            included_suffixes : list of filename suffixes to include when
-             formatting output [default: include all files]
+        See :class:`FileLink` for the ``path``, ``url_prefix``,
+        ``result_html_prefix`` and ``result_html_suffix`` parameters.
 
-            See the FileLink (baseclass of LocalDirectory) docstring for
-             information on additional parameters.
+        included_suffixes : list
+          Filename suffixes to include when formatting output [default: include
+          all files]
 
-            notebook_display_formatter : func used to format links for display
-             in the notebook. See discussion of formatter function below.
+        notebook_display_formatter : function
+          Used to format links for display in the notebook. See discussion of
+          formatter functions below.
 
-            terminal_display_formatter : func used to format links for display
-             in the terminal. See discussion of formatter function below.
+        terminal_display_formatter : function
+          Used to format links for display in the terminal. See discussion of
+          formatter functions below.
 
+        Formatter functions must be of the form::
 
-            Passing custom formatter functions
-            ----------------------------------
-             Formatter functions must be of the form:
-              f(dirname, fnames, included_suffixes)
-               dirname : the name of a directory (a string),
-               fnames :  a list of the files in that directory
-               included_suffixes : a list of the file suffixes that should be
-                                   included in the output (passing None means
-                                   to include all suffixes in the output in
-                                   the built-in formatters)
+            f(dirname, fnames, included_suffixes)
 
-               returns a list of lines that should will be print in the
-               notebook (if passing notebook_display_formatter) or the terminal
-               (if passing terminal_display_formatter). This function is iterated
-               over for each directory in self.path. Default formatters are in
-               place, can be passed here to support alternative formatting.
+        dirname : str
+          The name of a directory
+        fnames : list
+          The files in that directory
+        included_suffixes : list
+          The file suffixes that should be included in the output (passing None
+          meansto include all suffixes in the output in the built-in formatters)
+
+        The function should return a list of lines that will be printed in the
+        notebook (if passing notebook_display_formatter) or the terminal (if
+        passing terminal_display_formatter). This function is iterated over for
+        each directory in self.path. Default formatters are in place, can be
+        passed here to support alternative formatting.
 
         """
         if isfile(path):
-            raise ValueError,\
-             ("Cannot display a file using FileLinks. "
+            raise ValueError("Cannot display a file using FileLinks. "
               "Use FileLink to display '%s'." % path)
         self.included_suffixes = included_suffixes
         # remove trailing slashs for more consistent output formatting

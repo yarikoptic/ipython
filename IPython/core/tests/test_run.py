@@ -15,6 +15,7 @@ from __future__ import absolute_import
 
 import functools
 import os
+from os.path import join as pjoin
 import random
 import sys
 import tempfile
@@ -27,6 +28,7 @@ from nose import SkipTest
 from IPython.testing import decorators as dec
 from IPython.testing import tools as tt
 from IPython.utils import py3compat
+from IPython.utils.io import capture_output
 from IPython.utils.tempdir import TemporaryDirectory
 from IPython.core import debugger
 
@@ -359,6 +361,35 @@ tclass.py: deleting object: C-third
         self.mktmp(src)
         _ip.magic('run -t -N 1 %s' % self.fname)
         _ip.magic('run -t -N 10 %s' % self.fname)
+    
+    def test_ignore_sys_exit(self):
+        """Test the -e option to ignore sys.exit()"""
+        src = "import sys; sys.exit(1)"
+        self.mktmp(src)
+        with tt.AssertPrints('SystemExit'):
+            _ip.magic('run %s' % self.fname)
+        
+        with tt.AssertNotPrints('SystemExit'):
+            _ip.magic('run -e %s' % self.fname)
+    
+    def test_run_nb(self):
+        """Test %run notebook.ipynb"""
+        from IPython.nbformat import current
+        nb = current.new_notebook(
+            worksheets=[
+                current.new_worksheet(cells=[
+                    current.new_text_cell("The Ultimate Question of Everything"),
+                    current.new_code_cell("answer=42")
+                ])
+            ]
+        )
+        src = current.writes(nb, 'json')
+        self.mktmp(src, ext='.ipynb')
+        
+        _ip.magic("run %s" % self.fname)
+        
+        nt.assert_equal(_ip.user_ns['answer'], 42)
+        
 
 
 class TestMagicRunWithPackage(unittest.TestCase):
@@ -378,7 +409,7 @@ class TestMagicRunWithPackage(unittest.TestCase):
         self.value = int(random.random() * 10000)
 
         self.tempdir = TemporaryDirectory()
-        self.__orig_cwd = os.getcwdu()
+        self.__orig_cwd = py3compat.getcwd()
         sys.path.insert(0, self.tempdir.name)
 
         self.writefile(os.path.join(package, '__init__.py'), '')
@@ -398,6 +429,7 @@ class TestMagicRunWithPackage(unittest.TestCase):
         self.tempdir.cleanup()
 
     def check_run_submodule(self, submodule, opts=''):
+        _ip.user_ns.pop('x', None)
         _ip.magic('run {2} -m {0}.{1}'.format(self.package, submodule, opts))
         self.assertEqual(_ip.user_ns['x'], self.value,
                          'Variable `x` is not loaded from module `{0}`.'
@@ -430,3 +462,54 @@ class TestMagicRunWithPackage(unittest.TestCase):
     @with_fake_debugger
     def test_debug_run_submodule_with_relative_import(self):
         self.check_run_submodule('relative', '-d')
+
+def test_run__name__():
+    with TemporaryDirectory() as td:
+        path = pjoin(td, 'foo.py')
+        with open(path, 'w') as f:
+            f.write("q = __name__")
+        
+        _ip.user_ns.pop('q', None)
+        _ip.magic('run {}'.format(path))
+        nt.assert_equal(_ip.user_ns.pop('q'), '__main__')
+        
+        _ip.magic('run -n {}'.format(path))
+        nt.assert_equal(_ip.user_ns.pop('q'), 'foo')
+
+def test_run_tb():
+    """Test traceback offset in %run"""
+    with TemporaryDirectory() as td:
+        path = pjoin(td, 'foo.py')
+        with open(path, 'w') as f:
+            f.write('\n'.join([
+                "def foo():",
+                "    return bar()",
+                "def bar():",
+                "    raise RuntimeError('hello!')",
+                "foo()",
+            ]))
+        with capture_output() as io:
+            _ip.magic('run {}'.format(path))
+        out = io.stdout
+        nt.assert_not_in("execfile", out)
+        nt.assert_in("RuntimeError", out)
+        nt.assert_equal(out.count("---->"), 3)
+
+@dec.knownfailureif(sys.platform == 'win32', "writes to io.stdout aren't captured on Windows")
+def test_script_tb():
+    """Test traceback offset in `ipython script.py`"""
+    with TemporaryDirectory() as td:
+        path = pjoin(td, 'foo.py')
+        with open(path, 'w') as f:
+            f.write('\n'.join([
+                "def foo():",
+                "    return bar()",
+                "def bar():",
+                "    raise RuntimeError('hello!')",
+                "foo()",
+            ]))
+        out, err = tt.ipexec(path)
+        nt.assert_not_in("execfile", out)
+        nt.assert_in("RuntimeError", out)
+        nt.assert_equal(out.count("---->"), 3)
+

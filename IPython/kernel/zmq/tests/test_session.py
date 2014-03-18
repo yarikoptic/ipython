@@ -13,12 +13,24 @@
 
 import os
 import uuid
+from datetime import datetime
+
 import zmq
 
 from zmq.tests import BaseZMQTestCase
 from zmq.eventloop.zmqstream import ZMQStream
 
 from IPython.kernel.zmq import session as ss
+
+from IPython.testing.decorators import skipif, module_not_available
+from IPython.utils.py3compat import string_types
+from IPython.utils import jsonutil
+
+def _bad_packer(obj):
+    raise TypeError("I don't work")
+
+def _bad_unpacker(bytes):
+    raise TypeError("I don't work either")
 
 class SessionTestCase(BaseZMQTestCase):
 
@@ -149,24 +161,6 @@ class TestSession(SessionTestCase):
         t.wait(1) # this will raise
 
 
-    # def test_rekey(self):
-    #     """rekeying dict around json str keys"""
-    #     d = {'0': uuid.uuid4(), 0:uuid.uuid4()}
-    #     self.assertRaises(KeyError, ss.rekey, d)
-    #
-    #     d = {'0': uuid.uuid4(), 1:uuid.uuid4(), 'asdf':uuid.uuid4()}
-    #     d2 = {0:d['0'],1:d[1],'asdf':d['asdf']}
-    #     rd = ss.rekey(d)
-    #     self.assertEqual(d2,rd)
-    #
-    #     d = {'1.5':uuid.uuid4(),'1':uuid.uuid4()}
-    #     d2 = {1.5:d['1.5'],1:d['1']}
-    #     rd = ss.rekey(d)
-    #     self.assertEqual(d2,rd)
-    #
-    #     d = {'1.0':uuid.uuid4(),'1':uuid.uuid4()}
-    #     self.assertRaises(KeyError, ss.rekey, d)
-    #
     def test_unique_msg_ids(self):
         """test that messages receive unique ids"""
         ids = set()
@@ -222,4 +216,98 @@ class TestSession(SessionTestCase):
         self.assertTrue(len(session.digest_history) == 100)
         session._add_digest(uuid.uuid4().bytes)
         self.assertTrue(len(session.digest_history) == 91)
+    
+    def test_bad_pack(self):
+        try:
+            session = ss.Session(pack=_bad_packer)
+        except ValueError as e:
+            self.assertIn("could not serialize", str(e))
+            self.assertIn("don't work", str(e))
+        else:
+            self.fail("Should have raised ValueError")
+    
+    def test_bad_unpack(self):
+        try:
+            session = ss.Session(unpack=_bad_unpacker)
+        except ValueError as e:
+            self.assertIn("could not handle output", str(e))
+            self.assertIn("don't work either", str(e))
+        else:
+            self.fail("Should have raised ValueError")
+    
+    def test_bad_packer(self):
+        try:
+            session = ss.Session(packer=__name__ + '._bad_packer')
+        except ValueError as e:
+            self.assertIn("could not serialize", str(e))
+            self.assertIn("don't work", str(e))
+        else:
+            self.fail("Should have raised ValueError")
+    
+    def test_bad_unpacker(self):
+        try:
+            session = ss.Session(unpacker=__name__ + '._bad_unpacker')
+        except ValueError as e:
+            self.assertIn("could not handle output", str(e))
+            self.assertIn("don't work either", str(e))
+        else:
+            self.fail("Should have raised ValueError")
+    
+    def test_bad_roundtrip(self):
+        with self.assertRaises(ValueError):
+            session = ss.Session(unpack=lambda b: 5)
+    
+    def _datetime_test(self, session):
+        content = dict(t=datetime.now())
+        metadata = dict(t=datetime.now())
+        p = session.msg('msg')
+        msg = session.msg('msg', content=content, metadata=metadata, parent=p['header'])
+        smsg = session.serialize(msg)
+        msg2 = session.unserialize(session.feed_identities(smsg)[1])
+        assert isinstance(msg2['header']['date'], datetime)
+        self.assertEqual(msg['header'], msg2['header'])
+        self.assertEqual(msg['parent_header'], msg2['parent_header'])
+        self.assertEqual(msg['parent_header'], msg2['parent_header'])
+        assert isinstance(msg['content']['t'], datetime)
+        assert isinstance(msg['metadata']['t'], datetime)
+        assert isinstance(msg2['content']['t'], string_types)
+        assert isinstance(msg2['metadata']['t'], string_types)
+        self.assertEqual(msg['content'], jsonutil.extract_dates(msg2['content']))
+        self.assertEqual(msg['content'], jsonutil.extract_dates(msg2['content']))
+    
+    def test_datetimes(self):
+        self._datetime_test(self.session)
+    
+    def test_datetimes_pickle(self):
+        session = ss.Session(packer='pickle')
+        self._datetime_test(session)
+    
+    @skipif(module_not_available('msgpack'))
+    def test_datetimes_msgpack(self):
+        session = ss.Session(packer='msgpack.packb', unpacker='msgpack.unpackb')
+        self._datetime_test(session)
+    
+    def test_send_raw(self):
+        ctx = zmq.Context.instance()
+        A = ctx.socket(zmq.PAIR)
+        B = ctx.socket(zmq.PAIR)
+        A.bind("inproc://test")
+        B.connect("inproc://test")
 
+        msg = self.session.msg('execute', content=dict(a=10))
+        msg_list = [self.session.pack(msg[part]) for part in 
+                    ['header', 'parent_header', 'metadata', 'content']]
+        self.session.send_raw(A, msg_list, ident=b'foo')
+        
+        ident, new_msg_list = self.session.feed_identities(B.recv_multipart())
+        new_msg = self.session.unserialize(new_msg_list)
+        self.assertEqual(ident[0], b'foo')
+        self.assertEqual(new_msg['msg_type'],msg['msg_type'])
+        self.assertEqual(new_msg['header'],msg['header'])
+        self.assertEqual(new_msg['parent_header'],msg['parent_header'])
+        self.assertEqual(new_msg['content'],msg['content'])
+        self.assertEqual(new_msg['metadata'],msg['metadata'])
+
+        A.close()
+        B.close()
+        ctx.term()

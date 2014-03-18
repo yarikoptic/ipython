@@ -23,11 +23,11 @@ from IPython.qt.rich_text import HtmlExporter
 from IPython.qt.util import MetaQObjectHasTraits, get_font
 from IPython.utils.text import columnize
 from IPython.utils.traitlets import Bool, Enum, Integer, Unicode
-from ansi_code_processor import QtAnsiCodeProcessor
-from completion_widget import CompletionWidget
-from completion_html import CompletionHtml
-from completion_plain import CompletionPlain
-from kill_ring import QtKillRing
+from .ansi_code_processor import QtAnsiCodeProcessor
+from .completion_widget import CompletionWidget
+from .completion_html import CompletionHtml
+from .completion_plain import CompletionPlain
+from .kill_ring import QtKillRing
 
 
 #-----------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def is_letter_or_number(char):
 # Classes
 #-----------------------------------------------------------------------------
 
-class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
+class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.QWidget), {})):
     """ An abstract base class for console-type widgets. This class has
         functionality for:
 
@@ -82,7 +82,6 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         ConsoleWidget also provides a number of utility methods that will be
         convenient to implementors of a console-style widget.
     """
-    __metaclass__ = MetaQObjectHasTraits
 
     #------ Configuration ------------------------------------------------------
 
@@ -131,15 +130,18 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         help="""
         The type of paging to use. Valid values are:
 
-            'inside' : The widget pages like a traditional terminal.
-            'hsplit' : When paging is requested, the widget is split
-                       horizontally. The top pane contains the console, and the
-                       bottom pane contains the paged text.
-            'vsplit' : Similar to 'hsplit', except that a vertical splitter
-                       used.
-            'custom' : No action is taken by the widget beyond emitting a
-                       'custom_page_requested(str)' signal.
-            'none'   : The text is written directly to the console.
+        'inside'
+           The widget pages like a traditional terminal.
+        'hsplit'
+           When paging is requested, the widget is split horizontally. The top
+           pane contains the console, and the bottom pane contains the paged text.
+        'vsplit'
+           Similar to 'hsplit', except that a vertical splitter is used.
+        'custom'
+           No action is taken by the widget beyond emitting a
+           'custom_page_requested(str)' signal.
+        'none'
+           The text is written directly to the console.
         """)
 
     font_family = Unicode(config=True,
@@ -221,9 +223,9 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
 
     # The shortcuts defined by this widget. We need to keep track of these to
     # support 'override_shortcuts' above.
-    _shortcuts = set(_ctrl_down_remap.keys() +
-                     [ QtCore.Qt.Key_C, QtCore.Qt.Key_G, QtCore.Qt.Key_O,
-                       QtCore.Qt.Key_V ])
+    _shortcuts = set(_ctrl_down_remap.keys()) | \
+                     { QtCore.Qt.Key_C, QtCore.Qt.Key_G, QtCore.Qt.Key_O,
+                       QtCore.Qt.Key_V }
 
     _temp_buffer_filled = False
 
@@ -234,8 +236,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
     def __init__(self, parent=None, **kw):
         """ Create a ConsoleWidget.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         parent : QWidget, optional [default None]
             The parent for this widget.
         """
@@ -313,7 +315,7 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         self._pending_text_flush_interval.setInterval(100)
         self._pending_text_flush_interval.setSingleShot(True)
         self._pending_text_flush_interval.timeout.connect(
-                                            self._flush_pending_stream)
+                                            self._on_flush_pending_stream_timer)
 
         # Set a monospaced font.
         self.reset_font()
@@ -541,8 +543,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
     def clear(self, keep_input=True):
         """ Clear the console.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         keep_input : bool, optional (default True)
             If set, restores the old input buffer if a new prompt is written.
         """
@@ -578,8 +580,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         """ Executes source or the input buffer, possibly prompting for more
         input.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         source : str, optional
 
             The source to execute. If not specified, the input buffer will be
@@ -598,14 +600,14 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
             entered by the user. The effect of this parameter depends on the
             subclass implementation.
 
-        Raises:
-        -------
+        Raises
+        ------
         RuntimeError
             If incomplete input is given and 'hidden' is True. In this case,
             it is not possible to prompt for more input.
 
-        Returns:
-        --------
+        Returns
+        -------
         A boolean indicating whether the source was executed.
         """
         # WARNING: The order in which things happen here is very particular, in
@@ -744,8 +746,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
     def paste(self, mode=QtGui.QClipboard.Clipboard):
         """ Paste the contents of the clipboard into the input region.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         mode : QClipboard::Mode, optional [default QClipboard::Clipboard]
 
             Controls which part of the system clipboard is used. This can be
@@ -1058,8 +1060,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         """ Given a KeyboardModifiers flags object, return whether the Control
         key is down.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_command : bool, optional (default True)
             Whether to treat the Command key as a (mutually exclusive) synonym
             for Control when in Mac OS.
@@ -1489,6 +1491,20 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
 
         return False
 
+    def _on_flush_pending_stream_timer(self):
+        """ Flush the pending stream output and change the
+        prompt position appropriately.
+        """
+        cursor = self._control.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        pos = cursor.position()
+        self._flush_pending_stream()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        diff = cursor.position() - pos
+        if diff > 0:
+            self._prompt_pos += diff
+            self._append_before_prompt_pos += diff
+
     def _flush_pending_stream(self):
         """ Flush out pending text into the widget. """
         text = self._pending_insert_text
@@ -1866,8 +1882,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         """ Displays text using the pager if it exceeds the height of the
         viewport.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         html : bool, optional (default False)
             If set, the text will be interpreted as HTML instead of plain text.
         """
@@ -1901,11 +1917,8 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
         """
         Change the pager to `paging` style.
 
-        XXX: currently, this is limited to switching between 'hsplit' and
-        'vsplit'.
-
-        Parameters:
-        -----------
+        Parameters
+        ----------
         paging : string
             Either "hsplit", "vsplit", or "inside"
         """
@@ -2045,6 +2058,7 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
             there is not already a newline at the end of the buffer.
         """
         # Save the current end position to support _append*(before_prompt=True).
+        self._flush_pending_stream()
         cursor = self._get_end_cursor()
         self._append_before_prompt_pos = cursor.position()
 
@@ -2054,6 +2068,7 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
                                 QtGui.QTextCursor.KeepAnchor)
             if cursor.selection().toPlainText() != '\n':
                 self._append_block()
+                self._append_before_prompt_pos += 1
 
         # Write the prompt.
         self._append_plain_text(self._prompt_sep)
@@ -2071,7 +2086,6 @@ class ConsoleWidget(LoggingConfigurable, QtGui.QWidget):
                 self._prompt = prompt
                 self._prompt_html = None
 
-        self._flush_pending_stream()
         self._prompt_pos = self._get_end_cursor().position()
         self._prompt_started()
 

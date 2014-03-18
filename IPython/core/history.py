@@ -30,6 +30,7 @@ import threading
 from IPython.config.configurable import Configurable
 from IPython.external.decorator import decorator
 from IPython.utils.path import locate_profile
+from IPython.utils import py3compat
 from IPython.utils.traitlets import (
     Any, Bool, Dict, Instance, Integer, List, Unicode, TraitError,
 )
@@ -423,7 +424,7 @@ class HistoryManager(HistoryAccessor):
     dir_hist = List()
     def _dir_hist_default(self):
         try:
-            return [os.getcwdu()]
+            return [py3compat.getcwd()]
         except OSError:
             return []
 
@@ -435,11 +436,14 @@ class HistoryManager(HistoryAccessor):
 
     # The number of the current session in the history database
     session_number = Integer()
-    # Should we log output to the database? (default no)
-    db_log_output = Bool(False, config=True)
-    # Write to database every x commands (higher values save disk access & power)
-    #  Values of 1 or less effectively disable caching. 
-    db_cache_size = Integer(0, config=True)
+    
+    db_log_output = Bool(False, config=True,
+        help="Should the history database include output? (default: no)"
+    )
+    db_cache_size = Integer(0, config=True,
+        help="Write to database every x commands (higher values save disk access & power).\n"
+        "Values of 1 or less effectively disable caching."
+    )
     # The input and output caches
     db_input_cache = List()
     db_output_cache = List()
@@ -519,7 +523,7 @@ class HistoryManager(HistoryAccessor):
         optionally open a new session."""
         self.output_hist.clear()
         # The directory history can't be completely empty
-        self.dir_hist[:] = [os.getcwdu()]
+        self.dir_hist[:] = [py3compat.getcwd()]
         
         if new_session:
             if self.session_number:
@@ -713,7 +717,7 @@ class HistorySavingThread(threading.Thread):
     stop_now = False
     enabled = True
     def __init__(self, history_manager):
-        super(HistorySavingThread, self).__init__()
+        super(HistorySavingThread, self).__init__(name="IPythonHistorySavingThread")
         self.history_manager = history_manager
         self.enabled = history_manager.enabled
         atexit.register(self.stop)

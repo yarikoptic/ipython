@@ -45,6 +45,14 @@ class FuncClsScanner(ast.NodeVisitor):
     def has_undoc_decorator(node):
         return any(isinstance(d, ast.Name) and d.id == 'undoc' \
                                 for d in node.decorator_list)
+
+    def visit_If(self, node):
+        if isinstance(node.test, ast.Compare) \
+                and isinstance(node.test.left, ast.Name) \
+                and node.test.left.id == '__name__':
+            return   # Ignore classes defined in "if __name__ == '__main__':"
+
+        self.generic_visit(node)
     
     def visit_FunctionDef(self, node):
         if not (node.name.startswith('_') or self.has_undoc_decorator(node)) \
@@ -212,7 +220,7 @@ class ApiDocWriter(object):
         # get the names of all classes and functions
         functions, classes = self._parse_module(uri)
         if not len(functions) and not len(classes):
-            print ('WARNING: Empty -', uri)  # dbg
+            #print ('WARNING: Empty -', uri)  # dbg
             return ''
 
         # Make a shorter version of the uri that omits the package name for
@@ -407,7 +415,8 @@ class ApiDocWriter(object):
         idx = open(path,'wt')
         w = idx.write
         w('.. AUTO-GENERATED FILE -- DO NOT EDIT!\n\n')
-        w('.. toctree::\n\n')
-        for f in self.written_modules:
-            w('   %s\n' % os.path.join(relpath,f))
+        w('.. autosummary::\n'
+          '   :toctree: %s\n\n' % relpath)
+        for mod in self.written_modules:
+            w('   %s\n' % mod)
         idx.close()

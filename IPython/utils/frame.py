@@ -2,6 +2,7 @@
 """
 Utilities for working with stack frames.
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008-2011  The IPython Development Team
@@ -25,21 +26,24 @@ from IPython.utils import py3compat
 def extract_vars(*names,**kw):
     """Extract a set of variables by name from another frame.
 
-    :Parameters:
-      - `*names`: strings
+    Parameters
+    ----------
+    *names : str
         One or more variable names which will be extracted from the caller's
-    frame.
+        frame.
 
-    :Keywords:
-      - `depth`: integer (0)
+    depth : integer, optional
         How many frames in the stack to walk when looking for your variables.
+        The default is 0, which will use the frame where the call was made.
 
 
-    Examples:
+    Examples
+    --------
+    ::
 
         In [2]: def func(x):
            ...:     y = 1
-           ...:     print sorted(extract_vars('x','y').items())
+           ...:     print(sorted(extract_vars('x','y').items()))
            ...:
 
         In [3]: func('hello')
@@ -78,8 +82,8 @@ def debugx(expr,pre_msg=''):
     expr->value pair."""
 
     cf = sys._getframe(1)
-    print '[DBG:%s] %s%s -> %r' % (cf.f_code.co_name,pre_msg,expr,
-                                   eval(expr,cf.f_globals,cf.f_locals))
+    print('[DBG:%s] %s%s -> %r' % (cf.f_code.co_name,pre_msg,expr,
+                                   eval(expr,cf.f_globals,cf.f_locals)))
 
 
 # deactivate it by uncommenting the following line, which makes it a no-op

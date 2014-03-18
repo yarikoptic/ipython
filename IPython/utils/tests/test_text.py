@@ -1,5 +1,6 @@
 # encoding: utf-8
 """Tests for IPython.utils.text"""
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2011  The IPython Development Team
@@ -15,6 +16,7 @@
 import os
 import math
 import random
+import sys
 
 import nose.tools as nt
 
@@ -45,11 +47,11 @@ def test_columnize_random():
         longer_line = max([len(x) for x in out.split('\n')])
         longer_element = max(rand_len)
         if longer_line > displaywidth:
-            print "Columnize displayed something lager than displaywidth : %s " % longer_line
-            print "longer element : %s " % longer_element
-            print "displaywidth : %s " % displaywidth
-            print "number of element : %s " % nitems
-            print "size of each element :\n %s" % rand_len
+            print("Columnize displayed something lager than displaywidth : %s " % longer_line)
+            print("longer element : %s " % longer_element)
+            print("displaywidth : %s " % displaywidth)
+            print("number of element : %s " % nitems)
+            print("size of each element :\n %s" % rand_len)
             assert False
 
 def test_columnize_medium():
@@ -107,7 +109,12 @@ def eval_formatter_no_slicing_check(f):
     s = f.format('{stuff[slice(1,4)]}', **ns)
     nt.assert_equal(s, 'ell')
     
-    nt.assert_raises(SyntaxError, f.format, "{a[:]}")
+    if sys.version_info >= (3, 4):
+        # String formatting has changed in Python 3.4, so this now works.
+        s = f.format("{a[:]}", a=[1, 2])
+        nt.assert_equal(s, "[1, 2]")
+    else:
+        nt.assert_raises(SyntaxError, f.format, "{a[:]}")
 
 def test_eval_formatter():
     f = text.EvalFormatter()
@@ -168,3 +175,16 @@ def test_strip_email2():
     src = '> > > list()'
     cln = 'list()'
     nt.assert_equal(text.strip_email_quotes(src), cln)
+
+def test_LSString():
+    lss = text.LSString("abc\ndef")
+    nt.assert_equal(lss.l, ['abc', 'def'])
+    nt.assert_equal(lss.s, 'abc def')
+
+def test_SList():
+    sl = text.SList(['a 11', 'b 1', 'a 2'])
+    nt.assert_equal(sl.n, 'a 11\nb 1\na 2')
+    nt.assert_equal(sl.s, 'a 11 b 1 a 2')
+    nt.assert_equal(sl.grep(lambda x: x.startswith('a')), text.SList(['a 11', 'a 2']))
+    nt.assert_equal(sl.fields(0), text.SList(['a', 'b', 'a']))
+    nt.assert_equal(sl.sort(field=1, nums=True), text.SList(['b 1', 'a 2', 'a 11']))

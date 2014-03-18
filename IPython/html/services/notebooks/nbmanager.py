@@ -3,6 +3,7 @@
 Authors:
 
 * Brian Granger
+* Zach Sailer
 """
 
 #-----------------------------------------------------------------------------
@@ -16,14 +17,13 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
+from fnmatch import fnmatch
+import itertools
 import os
-import uuid
-
-from tornado import web
 
 from IPython.config.configurable import LoggingConfigurable
-from IPython.nbformat import current
-from IPython.utils.traitlets import List, Dict, Unicode, TraitError
+from IPython.nbformat import current, sign
+from IPython.utils.traitlets import Instance, Unicode, List
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -31,47 +31,91 @@ from IPython.utils.traitlets import List, Dict, Unicode, TraitError
 
 class NotebookManager(LoggingConfigurable):
 
-    # Todo:
-    # The notebook_dir attribute is used to mean a couple of different things:
-    # 1. Where the notebooks are stored if FileNotebookManager is used.
-    # 2. The cwd of the kernel for a project.
-    # Right now we use this attribute in a number of different places and
-    # we are going to have to disentangle all of this.
-    notebook_dir = Unicode(os.getcwdu(), config=True, help="""
-        The directory to use for notebooks.
+    filename_ext = Unicode(u'.ipynb')
+    
+    notary = Instance(sign.NotebookNotary)
+    def _notary_default(self):
+        return sign.NotebookNotary(parent=self)
+    
+    hide_globs = List(Unicode, [u'__pycache__'], config=True, help="""
+        Glob patterns to hide in file and directory listings.
     """)
-    def _notebook_dir_changed(self, name, old, new):
-        """do a bit of validation of the notebook dir"""
-        if not os.path.isabs(new):
-            # If we receive a non-absolute path, make it absolute.
-            abs_new = os.path.abspath(new)
-            self.notebook_dir = abs_new
-            return
-        if os.path.exists(new) and not os.path.isdir(new):
-            raise TraitError("notebook dir %r is not a directory" % new)
-        if not os.path.exists(new):
-            self.log.info("Creating notebook dir %s", new)
-            try:
-                os.mkdir(new)
-            except:
-                raise TraitError("Couldn't create notebook dir %r" % new)
 
-    allowed_formats = List([u'json',u'py'])
+    # NotebookManager API part 1: methods that must be
+    # implemented in subclasses.
 
-    # Map notebook_ids to notebook names
-    mapping = Dict()
-
-    def load_notebook_names(self):
-        """Load the notebook names into memory.
-
-        This should be called once immediately after the notebook manager
-        is created to load the existing notebooks into the mapping in
-        memory.
+    def path_exists(self, path):
+        """Does the API-style path (directory) actually exist?
+        
+        Override this method in subclasses.
+        
+        Parameters
+        ----------
+        path : string
+            The path to check
+        
+        Returns
+        -------
+        exists : bool
+            Whether the path does indeed exist.
         """
-        self.list_notebooks()
+        raise NotImplementedError
 
-    def list_notebooks(self):
-        """List all notebooks.
+    def is_hidden(self, path):
+        """Does the API style path correspond to a hidden directory or file?
+        
+        Parameters
+        ----------
+        path : string
+            The path to check. This is an API path (`/` separated,
+            relative to base notebook-dir).
+        
+        Returns
+        -------
+        exists : bool
+            Whether the path is hidden.
+        
+        """
+        raise NotImplementedError
+
+    def notebook_exists(self, name, path=''):
+        """Returns a True if the notebook exists. Else, returns False.
+
+        Parameters
+        ----------
+        name : string
+            The name of the notebook you are checking.
+        path : string
+            The relative path to the notebook (with '/' as separator)
+
+        Returns
+        -------
+        bool
+        """
+        raise NotImplementedError('must be implemented in a subclass')
+
+    # TODO: Remove this after we create the contents web service and directories are
+    # no longer listed by the notebook web service.
+    def list_dirs(self, path):
+        """List the directory models for a given API style path."""
+        raise NotImplementedError('must be implemented in a subclass')
+
+    # TODO: Remove this after we create the contents web service and directories are
+    # no longer listed by the notebook web service.
+    def get_dir_model(self, name, path=''):
+        """Get the directory model given a directory name and its API style path.
+        
+        The keys in the model should be:
+        * name
+        * path
+        * last_modified
+        * created
+        * type='directory'
+        """
+        raise NotImplementedError('must be implemented in a subclass')
+
+    def list_notebooks(self, path=''):
+        """Return a list of notebook dicts without content.
 
         This returns a list of dicts, each of the form::
 
@@ -83,153 +127,157 @@ class NotebookManager(LoggingConfigurable):
         """
         raise NotImplementedError('must be implemented in a subclass')
 
-
-    def new_notebook_id(self, name):
-        """Generate a new notebook_id for a name and store its mapping."""
-        # TODO: the following will give stable urls for notebooks, but unless
-        # the notebooks are immediately redirected to their new urls when their
-        # filemname changes, nasty inconsistencies result.  So for now it's
-        # disabled and instead we use a random uuid4() call.  But we leave the
-        # logic here so that we can later reactivate it, whhen the necessary
-        # url redirection code is written.
-        #notebook_id = unicode(uuid.uuid5(uuid.NAMESPACE_URL,
-        #                 'file://'+self.get_path_by_name(name).encode('utf-8')))
-        
-        notebook_id = unicode(uuid.uuid4())
-        self.mapping[notebook_id] = name
-        return notebook_id
-
-    def delete_notebook_id(self, notebook_id):
-        """Delete a notebook's id in the mapping.
-
-        This doesn't delete the actual notebook, only its entry in the mapping.
-        """
-        del self.mapping[notebook_id]
-
-    def notebook_exists(self, notebook_id):
-        """Does a notebook exist?"""
-        return notebook_id in self.mapping
-
-    def get_notebook(self, notebook_id, format=u'json'):
-        """Get the representation of a notebook in format by notebook_id."""
-        format = unicode(format)
-        if format not in self.allowed_formats:
-            raise web.HTTPError(415, u'Invalid notebook format: %s' % format)
-        last_modified, nb = self.read_notebook_object(notebook_id)
-        kwargs = {}
-        if format == 'json':
-            # don't split lines for sending over the wire, because it
-            # should match the Python in-memory format.
-            kwargs['split_lines'] = False
-        data = current.writes(nb, format, **kwargs)
-        name = nb.metadata.get('name','notebook')
-        return last_modified, name, data
-
-    def read_notebook_object(self, notebook_id):
-        """Get the object representation of a notebook by notebook_id."""
+    def get_notebook(self, name, path='', content=True):
+        """Get the notebook model with or without content."""
         raise NotImplementedError('must be implemented in a subclass')
 
-    def save_new_notebook(self, data, name=None, format=u'json'):
-        """Save a new notebook and return its notebook_id.
-
-        If a name is passed in, it overrides any values in the notebook data
-        and the value in the data is updated to use that value.
-        """
-        if format not in self.allowed_formats:
-            raise web.HTTPError(415, u'Invalid notebook format: %s' % format)
-
-        try:
-            nb = current.reads(data.decode('utf-8'), format)
-        except:
-            raise web.HTTPError(400, u'Invalid JSON data')
-
-        if name is None:
-            try:
-                name = nb.metadata.name
-            except AttributeError:
-                raise web.HTTPError(400, u'Missing notebook name')
-        nb.metadata.name = name
-
-        notebook_id = self.write_notebook_object(nb)
-        return notebook_id
-
-    def save_notebook(self, notebook_id, data, name=None, format=u'json'):
-        """Save an existing notebook by notebook_id."""
-        if format not in self.allowed_formats:
-            raise web.HTTPError(415, u'Invalid notebook format: %s' % format)
-
-        try:
-            nb = current.reads(data.decode('utf-8'), format)
-        except:
-            raise web.HTTPError(400, u'Invalid JSON data')
-
-        if name is not None:
-            nb.metadata.name = name
-        self.write_notebook_object(nb, notebook_id)
-
-    def write_notebook_object(self, nb, notebook_id=None):
-        """Write a notebook object and return its notebook_id.
-
-        If notebook_id is None, this method should create a new notebook_id.
-        If notebook_id is not None, this method should check to make sure it
-        exists and is valid.
-        """
+    def save_notebook(self, model, name, path=''):
+        """Save the notebook and return the model with no content."""
         raise NotImplementedError('must be implemented in a subclass')
 
-    def delete_notebook(self, notebook_id):
-        """Delete notebook by notebook_id."""
+    def update_notebook(self, model, name, path=''):
+        """Update the notebook and return the model with no content."""
         raise NotImplementedError('must be implemented in a subclass')
 
-    def increment_filename(self, name):
-        """Increment a filename to make it unique.
+    def delete_notebook(self, name, path=''):
+        """Delete notebook by name and path."""
+        raise NotImplementedError('must be implemented in a subclass')
 
-        This exists for notebook stores that must have unique names. When a notebook
-        is created or copied this method constructs a unique filename, typically
-        by appending an integer to the name.
-        """
-        return name
-
-    def new_notebook(self):
-        """Create a new notebook and return its notebook_id."""
-        name = self.increment_filename('Untitled')
-        metadata = current.new_metadata(name=name)
-        nb = current.new_notebook(metadata=metadata)
-        notebook_id = self.write_notebook_object(nb)
-        return notebook_id
-
-    def copy_notebook(self, notebook_id):
-        """Copy an existing notebook and return its notebook_id."""
-        last_mod, nb = self.read_notebook_object(notebook_id)
-        name = nb.metadata.name + '-Copy'
-        name = self.increment_filename(name)
-        nb.metadata.name = name
-        notebook_id = self.write_notebook_object(nb)
-        return notebook_id
-    
-    # Checkpoint-related
-    
-    def create_checkpoint(self, notebook_id):
+    def create_checkpoint(self, name, path=''):
         """Create a checkpoint of the current state of a notebook
         
         Returns a checkpoint_id for the new checkpoint.
         """
         raise NotImplementedError("must be implemented in a subclass")
     
-    def list_checkpoints(self, notebook_id):
+    def list_checkpoints(self, name, path=''):
         """Return a list of checkpoints for a given notebook"""
         return []
     
-    def restore_checkpoint(self, notebook_id, checkpoint_id):
+    def restore_checkpoint(self, checkpoint_id, name, path=''):
         """Restore a notebook from one of its checkpoints"""
         raise NotImplementedError("must be implemented in a subclass")
 
-    def delete_checkpoint(self, notebook_id, checkpoint_id):
+    def delete_checkpoint(self, checkpoint_id, name, path=''):
         """delete a checkpoint for a notebook"""
         raise NotImplementedError("must be implemented in a subclass")
-    
-    def log_info(self):
-        self.log.info(self.info_string())
     
     def info_string(self):
         return "Serving notebooks"
 
+    # NotebookManager API part 2: methods that have useable default
+    # implementations, but can be overridden in subclasses.
+
+    def increment_filename(self, basename, path=''):
+        """Increment a notebook filename without the .ipynb to make it unique.
+        
+        Parameters
+        ----------
+        basename : unicode
+            The name of a notebook without the ``.ipynb`` file extension.
+        path : unicode
+            The URL path of the notebooks directory
+
+        Returns
+        -------
+        name : unicode
+            A notebook name (with the .ipynb extension) that starts
+            with basename and does not refer to any existing notebook.
+        """
+        path = path.strip('/')
+        for i in itertools.count():
+            name = u'{basename}{i}{ext}'.format(basename=basename, i=i,
+                                                ext=self.filename_ext)
+            if not self.notebook_exists(name, path):
+                break
+        return name
+
+    def create_notebook(self, model=None, path=''):
+        """Create a new notebook and return its model with no content."""
+        path = path.strip('/')
+        if model is None:
+            model = {}
+        if 'content' not in model:
+            metadata = current.new_metadata(name=u'')
+            model['content'] = current.new_notebook(metadata=metadata)
+        if 'name' not in model:
+            model['name'] = self.increment_filename('Untitled', path)
+            
+        model['path'] = path
+        model = self.save_notebook(model, model['name'], model['path'])
+        return model
+
+    def copy_notebook(self, from_name, to_name=None, path=''):
+        """Copy an existing notebook and return its new model.
+        
+        If to_name not specified, increment `from_name-Copy#.ipynb`.
+        """
+        path = path.strip('/')
+        model = self.get_notebook(from_name, path)
+        if not to_name:
+            base = os.path.splitext(from_name)[0] + '-Copy'
+            to_name = self.increment_filename(base, path)
+        model['name'] = to_name
+        model = self.save_notebook(model, to_name, path)
+        return model
+    
+    def log_info(self):
+        self.log.info(self.info_string())
+
+    def trust_notebook(self, name, path=''):
+        """Explicitly trust a notebook
+        
+        Parameters
+        ----------
+        name : string
+            The filename of the notebook
+        path : string
+            The notebook's directory
+        """
+        model = self.get_notebook(name, path)
+        nb = model['content']
+        self.log.warn("Trusting notebook %s/%s", path, name)
+        self.notary.mark_cells(nb, True)
+        self.save_notebook(model, name, path)
+    
+    def check_and_sign(self, nb, name, path=''):
+        """Check for trusted cells, and sign the notebook.
+        
+        Called as a part of saving notebooks.
+        
+        Parameters
+        ----------
+        nb : dict
+            The notebook structure
+        name : string
+            The filename of the notebook
+        path : string
+            The notebook's directory
+        """
+        if self.notary.check_cells(nb):
+            self.notary.sign(nb)
+        else:
+            self.log.warn("Saving untrusted notebook %s/%s", path, name)
+    
+    def mark_trusted_cells(self, nb, name, path=''):
+        """Mark cells as trusted if the notebook signature matches.
+        
+        Called as a part of loading notebooks.
+        
+        Parameters
+        ----------
+        nb : dict
+            The notebook structure
+        name : string
+            The filename of the notebook
+        path : string
+            The notebook's directory
+        """
+        trusted = self.notary.check_signature(nb)
+        if not trusted:
+            self.log.warn("Notebook %s/%s is not trusted", path, name)
+        self.notary.mark_cells(nb, trusted)
+
+    def should_list(self, name):
+        """Should this file/directory name be displayed in a listing?"""
+        return not any(fnmatch(name, glob) for glob in self.hide_globs)

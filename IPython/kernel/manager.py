@@ -1,5 +1,4 @@
-"""Base class to manage a running kernel
-"""
+"""Base class to manage a running kernel"""
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2013  The IPython Development Team
@@ -25,7 +24,7 @@ import zmq
 # Local imports
 from IPython.config.configurable import LoggingConfigurable
 from IPython.utils.importstring import import_item
-from IPython.utils.localinterfaces import LOCAL_IPS
+from IPython.utils.localinterfaces import is_local_ip, local_ips
 from IPython.utils.traitlets import (
     Any, Instance, Unicode, List, Bool, Type, DottedObjectName
 )
@@ -71,7 +70,13 @@ class KernelManager(LoggingConfigurable, ConnectionFileMixin):
 
     kernel_cmd = List(Unicode, config=True,
         help="""The Popen Command to launch the kernel.
-        Override this if you have a custom
+        Override this if you have a custom kernel.
+        If kernel_cmd is specified in a configuration file,
+        IPython does not pass any arguments to the kernel,
+        because it cannot make any assumptions about the 
+        arguments that the kernel understands. In particular,
+        this means that the kernel does not receive the
+        option --debug if it given on the IPython command line.
         """
     )
 
@@ -186,17 +191,17 @@ class KernelManager(LoggingConfigurable, ConnectionFileMixin):
         If random ports (port=0) are being used, this method must be called
         before the channels are created.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         **kw : optional
              keyword arguments that are passed down to build the kernel_cmd
              and launching the kernel (e.g. Popen kwargs).
         """
-        if self.transport == 'tcp' and self.ip not in LOCAL_IPS:
+        if self.transport == 'tcp' and not is_local_ip(self.ip):
             raise RuntimeError("Can only launch a kernel on a local interface. "
                                "Make sure that the '*_address' attributes are "
                                "configured properly. "
-                               "Currently valid addresses are: %s"%LOCAL_IPS
+                               "Currently valid addresses are: %s" % local_ips()
                                )
 
         # write connection file / get default ports
@@ -228,8 +233,8 @@ class KernelManager(LoggingConfigurable, ConnectionFileMixin):
         2. If that fails, the kernel is shutdown forcibly by sending it
            a signal.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         now : bool
             Should the kernel be forcible killed *now*. This skips the
             first, nice shutdown attempt.
@@ -241,11 +246,7 @@ class KernelManager(LoggingConfigurable, ConnectionFileMixin):
         self.stop_restarter()
 
         # FIXME: Shutdown does not work on Windows due to ZMQ errors!
-        if sys.platform == 'win32':
-            self._kill_kernel()
-            return
-
-        if now:
+        if now or sys.platform == 'win32':
             if self.has_kernel:
                 self._kill_kernel()
         else:
@@ -268,6 +269,8 @@ class KernelManager(LoggingConfigurable, ConnectionFileMixin):
             self.cleanup_ipc_files()
         else:
             self.cleanup_ipc_files()
+        
+        self._close_control_socket()
 
     def restart_kernel(self, now=False, **kw):
         """Restarts a kernel with the arguments that were used to launch it.

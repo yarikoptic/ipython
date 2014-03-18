@@ -5,6 +5,13 @@
 ======================
 
 
+Versioning
+==========
+
+The IPython message specification is versioned independently of IPython.
+The current version of the specification is 4.1.
+
+
 Introduction
 ============
 
@@ -395,6 +402,8 @@ the outcome.  See :ref:`below <execution_results>` for the possible return
 codes and associated data.
 
 
+.. _execution_counter:
+
 Execution counter (old prompt number)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -403,7 +412,7 @@ requests that are made with ``store_history=True``.  This counter is used to pop
 the ``In[n]``, ``Out[n]`` and ``_n`` variables, so clients will likely want to
 display it in some form to the user, which will typically (but not necessarily)
 be done in the prompts.  The value of this counter will be returned as the
-``execution_count`` field of all ``execute_reply`` messages.
+``execution_count`` field of all ``execute_reply`` and ``pyin`` messages.
 
 .. _execution_results:
 
@@ -430,7 +439,9 @@ When status is 'ok', the following extra fields are present::
       # Each execution payload is a dict with string keys that may have been
       # produced by the code being executed.  It is retrieved by the kernel at
       # the end of the execution and sent back to the front end, which can take
-      # action on it as needed.  See main text for further details.
+      # action on it as needed.
+      # The only requirement of each payload dict is that it have a 'source' key,
+      # which is a string classifying the payload (e.g. 'pager').
       'payload' : list(dict),
 
       # Results for the user_variables and user_expressions.
@@ -628,7 +639,7 @@ Message type: ``complete_reply``::
     # this is typically the common prefix of the matches,
     # and the text that is already in the block that would be replaced by the full completion.
     # This would be 'a.is' in the above example.
-    'text' : str,
+    'matched_text' : str,
     
     # status should be 'ok' unless an exception was raised during the request,
     # in which case it should be 'error', along with the usual error message content
@@ -816,18 +827,12 @@ Message type: ``stream``::
 Display Data
 ------------
 
-This type of message is used to bring back data that should be diplayed (text,
+This type of message is used to bring back data that should be displayed (text,
 html, svg, etc.) in the frontends. This data is published to all frontends.
 Each message can have multiple representations of the data; it is up to the
 frontend to decide which to use and how. A single message should contain all
 possible representations of the same information. Each representation should
 be a JSON'able data structure, and should be a valid MIME type.
-
-Some questions remain about this design:
-
-* Do we use this message type for pyout/displayhook? Probably not, because
-  the displayhook also has to handle the Out prompt display. On the other hand
-  we could put that information into the metadata secion.
 
 Message type: ``display_data``::
 
@@ -836,7 +841,7 @@ Message type: ``display_data``::
         # Who create the data
         'source' : str,
 
-        # The data dict contains key/value pairs, where the kids are MIME
+        # The data dict contains key/value pairs, where the keys are MIME
         # types and the values are the raw data of the representation in that
         # format.
         'data' : dict,
@@ -904,7 +909,10 @@ to update a single namespace with subsequent results.
 Python inputs
 -------------
 
-These messages are the re-broadcast of the ``execute_request``.
+To let all frontends know what code is being executed at any given time, these
+messages contain a re-broadcast of the ``code`` portion of an
+:ref:`execute_request <execute>`, along with the :ref:`execution_count
+<execution_counter>`.
 
 Message type: ``pyin``::
 
@@ -984,6 +992,28 @@ Message type: ``status``::
         execution_state : ('busy', 'idle', 'starting')
     }
 
+Clear output
+------------
+
+This message type is used to clear the output that is visible on the frontend.
+
+Message type: ``clear_output``::
+
+    content = {
+
+        # Wait to clear the output until new output is available.  Clears the
+        # existing output immediately before the new output is displayed.  
+        # Useful for creating simple animations with minimal flickering.
+        'wait' : bool,
+    }
+
+.. versionchanged:: 4.1
+
+    'stdout', 'stderr', and 'display' boolean keys for selective clearing are removed,
+    and 'wait' is added.
+    The selective clearing keys are ignored in v4 and the default behavior remains the same,
+    so v4 clear_output messages will be safely handled by a v4.1 frontend.
+
 
 Messages on the stdin ROUTER/DEALER sockets
 ===========================================
@@ -1004,7 +1034,15 @@ Message type: ``input_reply``::
 
     content = { 'value' : str }
     
-.. Note::
+.. note::
+
+    The stdin socket of the client is required to have the same zmq IDENTITY
+    as the client's shell socket.
+    Because of this, the ``input_request`` must be sent with the same IDENTITY
+    routing prefix as the ``execute_reply`` in order for the frontend to receive
+    the message.
+
+.. note::
 
    We do not explicitly try to forward the raw ``sys.stdin`` object, because in
    practice the kernel should behave like an interactive program.  When a
@@ -1044,6 +1082,79 @@ where the first part is the zmq.IDENTITY of the heart's DEALER on the engine, an
 the rest is the message sent by the monitor.  No Python code ever has any
 access to the message between the monitor's send, and the monitor's recv.
 
+Custom Messages
+===============
+
+.. versionadded:: 4.1
+
+IPython 2.0 (msgspec v4.1) adds a messaging system for developers to add their own objects with Frontend
+and Kernel-side components, and allow them to communicate with each other.
+To do this, IPython adds a notion of a ``Comm``, which exists on both sides,
+and can communicate in either direction.
+
+These messages are fully symmetrical - both the Kernel and the Frontend can send each message,
+and no messages expect a reply.
+The Kernel listens for these messages on the Shell channel,
+and the Frontend listens for them on the IOPub channel.
+
+Opening a Comm
+--------------
+
+Opening a Comm produces a ``comm_open`` message, to be sent to the other side::
+
+    {
+      'comm_id' : 'u-u-i-d',
+      'target_name' : 'my_comm',
+      'data' : {}
+    }
+
+Every Comm has an ID and a target name.
+The code handling the message on the receiving side is responsible for maintaining a mapping
+of target_name keys to constructors.
+After a ``comm_open`` message has been sent,
+there should be a corresponding Comm instance on both sides.
+The ``data`` key is always a dict and can be any extra JSON information used in initialization of the comm.
+
+If the ``target_name`` key is not found on the receiving side,
+then it should immediately reply with a ``comm_close`` message to avoid an inconsistent state.
+
+Comm Messages
+-------------
+
+Comm messages are one-way communications to update comm state,
+used for synchronizing widget state, or simply requesting actions of a comm's counterpart.
+
+Essentially, each comm pair defines their own message specification implemented inside the ``data`` dict.
+
+There are no expected replies (of course, one side can send another ``comm_msg`` in reply).
+
+Message type: ``comm_msg``::
+
+    {
+      'comm_id' : 'u-u-i-d',
+      'data' : {}
+    }
+
+Tearing Down Comms
+------------------
+
+Since comms live on both sides, when a comm is destroyed the other side must be notified.
+This is done with a ``comm_close`` message.
+
+Message type: ``comm_close``::
+
+    {
+      'comm_id' : 'u-u-i-d',
+      'data' : {}
+    }
+
+Output Side Effects
+-------------------
+
+Since comm messages can execute arbitrary user code,
+handlers should set the parent header and publish status busy / idle,
+just like an execute request.
+
 
 ToDo
 ====
@@ -1055,10 +1166,5 @@ Missing things include:
 * Important: ensure that we have a good solution for magics like %edit.  It's
   likely that with the payload concept we can build a full solution, but not
   100% clear yet.
-
-* Finishing the details of the heartbeat protocol.
-
-* Signal handling: specify what kind of information kernel should broadcast (or
-  not) when it receives signals.
 
 .. include:: ../links.txt

@@ -1,12 +1,22 @@
+"""Input transformer classes to support IPython special syntax.
+
+This includes the machinery to recognise and transform ``%magic`` commands,
+``!system`` commands, ``help?`` querying, prompt stripping, and so forth.
+"""
 import abc
 import functools
 import re
-from StringIO import StringIO
 
 from IPython.core.splitinput import LineInfo
 from IPython.utils import tokenize2
 from IPython.utils.openpy import cookie_comment_re
+from IPython.utils.py3compat import with_metaclass, PY3
 from IPython.utils.tokenize2 import generate_tokens, untokenize, TokenError
+
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -33,9 +43,8 @@ ESC_SEQUENCES = [ESC_SHELL, ESC_SH_CAP, ESC_HELP ,\
                  ESC_QUOTE, ESC_QUOTE2, ESC_PAREN ]
 
 
-class InputTransformer(object):
+class InputTransformer(with_metaclass(abc.ABCMeta, object)):
     """Abstract base class for line-based input transformers."""
-    __metaclass__ = abc.ABCMeta
     
     @abc.abstractmethod
     def push(self, line):
@@ -43,6 +52,9 @@ class InputTransformer(object):
         input or None if the transformer is waiting for more input.
         
         Must be overridden by subclasses.
+
+        Implementations may raise ``SyntaxError`` if the input is invalid. No
+        other exceptions may be raised.
         """
         pass
     
@@ -317,7 +329,7 @@ def has_comment(src):
 def ends_in_comment_or_string(src):
     """Indicates whether or not an input line ends in a comment or within
     a multiline string.
-
+    
     Parameters
     ----------
     src : string
@@ -330,7 +342,7 @@ def ends_in_comment_or_string(src):
     """
     toktypes = _line_tokens(src)
     return (tokenize2.COMMENT in toktypes) or (_MULTILINE_STRING in toktypes)
-
+        
 
 @StatelessInputTransformer.wrap
 def help_end(line):
@@ -449,8 +461,7 @@ def classic_prompt():
 def ipy_prompt():
     """Strip IPython's In [1]:/...: prompts."""
     # FIXME: non-capturing version (?:...) usable?
-    # FIXME: r'^(In \[\d+\]: | {3}\.{3,}: )' clearer?
-    prompt_re = re.compile(r'^(In \[\d+\]: |\ \ \ \.\.\.+: )')
+    prompt_re = re.compile(r'^(In \[\d+\]: |\ {3,}\.{3,}: )')
     return _strip_prompts(prompt_re)
 
 
@@ -505,9 +516,17 @@ def strip_encoding_cookie():
         while line is not None:
             line = (yield line)
 
+_assign_pat = \
+r'''(?P<lhs>(\s*)
+    ([\w\.]+)                # Initial identifier
+    (\s*,\s*
+        \*?[\w\.]+)*         # Further identifiers for unpacking
+    \s*?,?                   # Trailing comma
+    )
+    \s*=\s*
+'''
 
-assign_system_re = re.compile(r'(?P<lhs>(\s*)([\w\.]+)((\s*,\s*[\w\.]+)*))'
-                              r'\s*=\s*!\s*(?P<cmd>.*)')
+assign_system_re = re.compile(r'{}!\s*(?P<cmd>.*)'.format(_assign_pat), re.VERBOSE)
 assign_system_template = '%s = get_ipython().getoutput(%r)'
 @StatelessInputTransformer.wrap
 def assign_from_system(line):
@@ -518,8 +537,7 @@ def assign_from_system(line):
     
     return assign_system_template % m.group('lhs', 'cmd')
 
-assign_magic_re = re.compile(r'(?P<lhs>(\s*)([\w\.]+)((\s*,\s*[\w\.]+)*))'
-                             r'\s*=\s*%\s*(?P<cmd>.*)')
+assign_magic_re = re.compile(r'{}%\s*(?P<cmd>.*)'.format(_assign_pat), re.VERBOSE)
 assign_magic_template = '%s = get_ipython().magic(%r)'
 @StatelessInputTransformer.wrap
 def assign_from_magic(line):

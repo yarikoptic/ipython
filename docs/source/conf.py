@@ -44,8 +44,10 @@ extensions = [
     'matplotlib.sphinxext.only_directives',
     'matplotlib.sphinxext.plot_directive',
     'sphinx.ext.autodoc',
+    'sphinx.ext.autosummary',
     'sphinx.ext.doctest',
     'sphinx.ext.inheritance_diagram',
+    'sphinx.ext.intersphinx',
     'IPython.sphinxext.ipython_console_highlighting',
     'IPython.sphinxext.ipython_directive',
     'numpydoc',  # to preprocess docstrings
@@ -71,7 +73,7 @@ if iprelease['_version_extra']:
     .. note::
 
         This documentation is for a development version of IPython. There may be
-        significant differences from the latest stable release (0.13.2).
+        significant differences from the latest stable release (1.2.1).
 
     """
 
@@ -84,6 +86,10 @@ copyright = '2008, The IPython Development Team'
 
 # ghissue config
 github_project_url = "https://github.com/ipython/ipython"
+
+# numpydoc config
+numpydoc_show_class_members = False # Otherwise Sphinx emits thousands of warnings
+numpydoc_class_members_toctree = False
 
 # The default replacements for |version| and |release|, also used in various
 # other places throughout the built documents.
@@ -178,6 +184,7 @@ html_additional_pages = {
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'ipythondoc'
 
+intersphinx_mapping = {'python': ('http://docs.python.org/2/', None)}
 
 # Options for LaTeX output
 # ------------------------
@@ -228,6 +235,8 @@ texinfo_documents = [
    'Programming',
    1),
 ]
+
+modindex_common_prefix = ['IPython.']
 
 
 # Cleanup

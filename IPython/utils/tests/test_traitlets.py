@@ -32,7 +32,7 @@ from IPython.utils.traitlets import (
     HasTraits, MetaHasTraits, TraitType, Any, CBytes, Dict,
     Int, Long, Integer, Float, Complex, Bytes, Unicode, TraitError,
     Undefined, Type, This, Instance, TCPAddress, List, Tuple,
-    ObjectName, DottedObjectName, CRegExp
+    ObjectName, DottedObjectName, CRegExp, link
 )
 from IPython.utils import py3compat
 from IPython.testing.decorators import skipif
@@ -148,16 +148,16 @@ class TestTraitType(TestCase):
 
         a = A()
         self.assertEqual(a._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(a.x, 11)
         self.assertEqual(a._trait_values, {'x': 11})
         b = B()
         self.assertEqual(b._trait_values, {'x': 20})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(b.x, 20)
         c = C()
         self.assertEqual(c._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(c.x, 21)
         self.assertEqual(c._trait_values, {'x': 21})
         # Ensure that the base class remains unmolested when the _default
@@ -165,7 +165,7 @@ class TestTraitType(TestCase):
         a = A()
         c = C()
         self.assertEqual(a._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(a.x, 11)
         self.assertEqual(a._trait_values, {'x': 11})
 
@@ -362,6 +362,44 @@ class TestHasTraitsNotify(TestCase):
         a.on_trait_change(callback3, 'a', remove=True)
 
         self.assertEqual(len(a._trait_notifiers['a']),0)
+
+    def test_notify_only_once(self):
+
+        class A(HasTraits):
+            listen_to = ['a']
+            
+            a = Int(0)
+            b = 0
+            
+            def __init__(self, **kwargs):
+                super(A, self).__init__(**kwargs)
+                self.on_trait_change(self.listener1, ['a'])
+            
+            def listener1(self, name, old, new):
+                self.b += 1
+
+        class B(A):
+                    
+            c = 0
+            d = 0
+            
+            def __init__(self, **kwargs):
+                super(B, self).__init__(**kwargs)
+                self.on_trait_change(self.listener2)
+            
+            def listener2(self, name, old, new):
+                self.c += 1
+            
+            def _a_changed(self, name, old, new):
+                self.d += 1
+
+        b = B()
+        b.a += 1
+        self.assertEqual(b.b, b.c)
+        self.assertEqual(b.b, b.d)
+        b.a += 1
+        self.assertEqual(b.b, b.c)
+        self.assertEqual(b.b, b.d)
 
 
 class TestHasTraits(TestCase):
@@ -680,26 +718,27 @@ class TestInt(TraitTestBase):
                       10.1, -10.1, '10L', '-10L', '10.1', '-10.1', u'10L',
                       u'-10L', u'10.1', u'-10.1',  '10', '-10', u'10', u'-10']
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L, 10*sys.maxint, -10*sys.maxint])
+        _bad_values.extend([long(10), long(-10), 10*sys.maxint, -10*sys.maxint])
 
 
 class LongTrait(HasTraits):
 
-    value = Long(99L)
+    value = Long(99 if py3compat.PY3 else long(99))
 
 class TestLong(TraitTestBase):
 
     obj = LongTrait()
 
-    _default_value = 99L
-    _good_values   = [10, -10, 10L, -10L]
-    _bad_values    = ['ten', u'ten', [10], [10l], {'ten': 10},(10,),(10L,),
+    _default_value = 99 if py3compat.PY3 else long(99)
+    _good_values   = [10, -10]
+    _bad_values    = ['ten', u'ten', [10], {'ten': 10},(10,),
                       None, 1j, 10.1, -10.1, '10', '-10', '10L', '-10L', '10.1',
                       '-10.1', u'10', u'-10', u'10L', u'-10L', u'10.1',
                       u'-10.1']
     if not py3compat.PY3:
         # maxint undefined on py3, because int == long
-        _good_values.extend([10*sys.maxint, -10*sys.maxint])
+        _good_values.extend([long(10), long(-10), 10*sys.maxint, -10*sys.maxint])
+        _bad_values.extend([[long(10)], (long(10),)])
 
     @skipif(py3compat.PY3, "not relevant on py3")
     def test_cast_small(self):
@@ -724,7 +763,7 @@ class TestInteger(TestLong):
         if py3compat.PY3:
             raise SkipTest("not relevant on py3")
 
-        self.obj.value = 100L
+        self.obj.value = long(100)
         self.assertEqual(type(self.obj.value), int)
 
 
@@ -742,7 +781,7 @@ class TestFloat(TraitTestBase):
                       1j, '10', '-10', '10L', '-10L', '10.1', '-10.1', u'10',
                       u'-10', u'10L', u'-10L', u'10.1', u'-10.1']
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L])
+        _bad_values.extend([long(10), long(-10)])
 
 
 class ComplexTrait(HasTraits):
@@ -758,7 +797,7 @@ class TestComplex(TraitTestBase):
                       10.1j, 10.1+10.1j, 10.1-10.1j]
     _bad_values    = [u'10L', u'-10L', 'ten', [10], {'ten': 10},(10,), None]
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L])
+        _bad_values.extend([long(10), long(-10)])
 
 
 class BytesTrait(HasTraits):
@@ -772,8 +811,10 @@ class TestBytes(TraitTestBase):
     _default_value = b'string'
     _good_values   = [b'10', b'-10', b'10L',
                       b'-10L', b'10.1', b'-10.1', b'string']
-    _bad_values    = [10, -10, 10L, -10L, 10.1, -10.1, 1j, [10],
+    _bad_values    = [10, -10, 10.1, -10.1, 1j, [10],
                       ['ten'],{'ten': 10},(10,), None,  u'string']
+    if not py3compat.PY3:
+        _bad_values.extend([long(10), long(-10)])
 
 
 class UnicodeTrait(HasTraits):
@@ -787,8 +828,10 @@ class TestUnicode(TraitTestBase):
     _default_value = u'unicode'
     _good_values   = ['10', '-10', '10L', '-10L', '10.1',
                       '-10.1', '', u'', 'string', u'string', u"€"]
-    _bad_values    = [10, -10, 10L, -10L, 10.1, -10.1, 1j,
+    _bad_values    = [10, -10, 10.1, -10.1, 1j,
                       [10], ['ten'], [u'ten'], {'ten': 10},(10,), None]
+    if not py3compat.PY3:
+        _bad_values.extend([long(10), long(-10)])
 
 
 class ObjectNameTrait(HasTraits):
@@ -843,8 +886,13 @@ class TestList(TraitTestBase):
     obj = ListTrait()
 
     _default_value = []
-    _good_values = [[], [1], range(10)]
-    _bad_values = [10, [1,'a'], 'a', (1,2)]
+    _good_values = [[], [1], list(range(10)), (1,2)]
+    _bad_values = [10, [1,'a'], 'a']
+    
+    def coerce(self, value):
+        if value is not None:
+            value = list(value)
+        return value
 
 class LenListTrait(HasTraits):
 
@@ -855,8 +903,13 @@ class TestLenList(TraitTestBase):
     obj = LenListTrait()
 
     _default_value = [0]
-    _good_values = [[1], range(2)]
-    _bad_values = [10, [1,'a'], 'a', (1,2), [], range(3)]
+    _good_values = [[1], [1,2], (1,2)]
+    _bad_values = [10, [1,'a'], 'a', [], list(range(3))]
+
+    def coerce(self, value):
+        if value is not None:
+            value = list(value)
+        return value
 
 class TupleTrait(HasTraits):
 
@@ -867,8 +920,13 @@ class TestTupleTrait(TraitTestBase):
     obj = TupleTrait()
 
     _default_value = None
-    _good_values = [(1,), None,(0,)]
-    _bad_values = [10, (1,2), [1],('a'), ()]
+    _good_values = [(1,), None, (0,), [1]]
+    _bad_values = [10, (1,2), ('a'), ()]
+
+    def coerce(self, value):
+        if value is not None:
+            value = tuple(value)
+        return value
 
     def test_invalid_args(self):
         self.assertRaises(TypeError, Tuple, 5)
@@ -884,8 +942,13 @@ class TestLooseTupleTrait(TraitTestBase):
     obj = LooseTupleTrait()
 
     _default_value = (1,2,3)
-    _good_values = [(1,), None, (0,), tuple(range(5)), tuple('hello'), ('a',5), ()]
-    _bad_values = [10, 'hello', [1], []]
+    _good_values = [(1,), None, [1], (0,), tuple(range(5)), tuple('hello'), ('a',5), ()]
+    _bad_values = [10, 'hello', {}]
+
+    def coerce(self, value):
+        if value is not None:
+            value = tuple(value)
+        return value
 
     def test_invalid_args(self):
         self.assertRaises(TypeError, Tuple, 5)
@@ -930,3 +993,103 @@ def test_dict_assignment():
     d['a'] = 5
     nt.assert_equal(d, c.value)
     nt.assert_true(c.value is d)
+
+class TestLink(TestCase):
+    def test_connect_same(self):
+        """Verify two traitlets of the same type can be linked together using link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Conenct the two classes.
+        c = link((a, 'value'), (b, 'value'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.value)
+
+        # Change one of the values to make sure they stay in sync.
+        a.value = 5
+        self.assertEqual(a.value, b.value)
+        b.value = 6
+        self.assertEqual(a.value, b.value)
+
+    def test_link_different(self):
+        """Verify two traitlets of different types can be linked together using link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        class B(HasTraits):
+            count = Int()
+        a = A(value=9)
+        b = B(count=8)
+
+        # Conenct the two classes.
+        c = link((a, 'value'), (b, 'count'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.count)
+
+        # Change one of the values to make sure they stay in sync.
+        a.value = 5
+        self.assertEqual(a.value, b.count)
+        b.count = 4
+        self.assertEqual(a.value, b.count)
+
+    def test_unlink(self):
+        """Verify two linked traitlets can be unlinked."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Connect the two classes.
+        c = link((a, 'value'), (b, 'value'))
+        a.value = 4
+        c.unlink()
+
+        # Change one of the values to make sure they don't stay in sync.
+        a.value = 5
+        self.assertNotEqual(a.value, b.value)
+
+    def test_callbacks(self):
+        """Verify two linked traitlets have their callbacks called once."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        class B(HasTraits):
+            count = Int()
+        a = A(value=9)
+        b = B(count=8)
+        
+        # Register callbacks that count.
+        callback_count = []
+        def a_callback(name, old, new):
+            callback_count.append('a')
+        a.on_trait_change(a_callback, 'value')
+        def b_callback(name, old, new):
+            callback_count.append('b')
+        b.on_trait_change(b_callback, 'count')
+
+        # Connect the two classes.
+        c = link((a, 'value'), (b, 'count'))
+
+        # Make sure b's count was set to a's value once.
+        self.assertEqual(''.join(callback_count), 'b')
+        del callback_count[:]
+
+        # Make sure a's value was set to b's count once.
+        b.count = 5
+        self.assertEqual(''.join(callback_count), 'ba')
+        del callback_count[:]
+
+        # Make sure b's count was set to a's value once.
+        a.value = 4
+        self.assertEqual(''.join(callback_count), 'ab')
+        del callback_count[:]
