@@ -4,24 +4,26 @@
 # System library imports.
 from IPython.external.qt import QtCore, QtGui, QtSvg
 
+# Our own imports
+from IPython.utils.py3compat import unicode_type
 
 def save_svg(string, parent=None):
     """ Prompts the user to save an SVG document to disk.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     string : basestring
         A Python string containing a SVG document.
 
     parent : QWidget, optional
         The parent to use for the file dialog.
 
-    Returns:
-    --------
+    Returns
+    -------
     The name of the file to which the document was saved, or None if the save
     was cancelled.
     """
-    if isinstance(string, unicode):
+    if isinstance(string, unicode_type):
         string = string.encode('utf-8')
 
     dialog = QtGui.QFileDialog(parent, 'Save SVG Document')
@@ -30,7 +32,7 @@ def save_svg(string, parent=None):
     dialog.setNameFilter('SVG document (*.svg)')
     if dialog.exec_():
         filename = dialog.selectedFiles()[0]
-        f = open(filename, 'w')
+        f = open(filename, 'wb')
         try:
             f.write(string)
         finally:
@@ -41,12 +43,12 @@ def save_svg(string, parent=None):
 def svg_to_clipboard(string):
     """ Copy a SVG document to the clipboard.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     string : basestring
         A Python string containing a SVG document.
     """
-    if isinstance(string, unicode):
+    if isinstance(string, unicode_type):
         string = string.encode('utf-8')
 
     mime_data = QtCore.QMimeData()
@@ -56,8 +58,8 @@ def svg_to_clipboard(string):
 def svg_to_image(string, size=None):
     """ Convert a SVG document to a QImage.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     string : basestring
         A Python string containing a SVG document.
 
@@ -65,16 +67,16 @@ def svg_to_image(string, size=None):
         The size of the image that is produced. If not specified, the SVG
         document's default size is used.
     
-    Raises:
-    -------
+    Raises
+    ------
     ValueError
         If an invalid SVG string is provided.
 
-    Returns:
-    --------
+    Returns
+    -------
     A QImage of format QImage.Format_ARGB32.
     """
-    if isinstance(string, unicode):
+    if isinstance(string, unicode_type):
         string = string.encode('utf-8')
 
     renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(string))

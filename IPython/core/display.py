@@ -22,8 +22,10 @@ from __future__ import print_function
 import os
 import struct
 
-from IPython.utils.py3compat import string_types, cast_bytes_py2, cast_unicode
-
+from IPython.core.formatters import _safe_get_formatter_method
+from IPython.utils.py3compat import (string_types, cast_bytes_py2, cast_unicode,
+                                     unicode_type)
+from IPython.testing.skipdoctest import skip_doctest
 from .displaypub import publish_display_data
 
 #-----------------------------------------------------------------------------
@@ -109,12 +111,23 @@ def display(*objs, **kwargs):
 
     from IPython.core.interactiveshell import InteractiveShell
 
-    if raw:
-        for obj in objs:
-            publish_display_data('display', obj, metadata)
-    else:
+    if not raw:
         format = InteractiveShell.instance().display_formatter.format
-        for obj in objs:
+
+    for obj in objs:
+
+        # If _ipython_display_ is defined, use that to display this object.
+        display_method = _safe_get_formatter_method(obj, '_ipython_display_')
+        if display_method is not None:
+            try:
+                display_method(**kwargs)
+            except NotImplementedError:
+                pass
+            else:
+                continue
+        if raw:
+            publish_display_data('display', obj, metadata)
+        else:
             format_dict, md_dict = format(obj, include=include, exclude=exclude)
             if metadata:
                 # kwarg-specified metadata gets precedence
@@ -259,6 +272,24 @@ def display_javascript(*objs, **kwargs):
     """
     _display_mimetype('application/javascript', objs, **kwargs)
 
+
+def display_pdf(*objs, **kwargs):
+    """Display the PDF representation of an object.
+
+    Parameters
+    ----------
+    objs : tuple of objects
+        The Python objects to display, or if raw=True raw javascript data to
+        display.
+    raw : bool
+        Are the data objects raw data or Python objects that need to be
+        formatted before display? [default: False]
+    metadata : dict (optional)
+        Metadata to be associated with the specific mimetype output.
+    """
+    _display_mimetype('application/pdf', objs, **kwargs)
+
+
 #-----------------------------------------------------------------------------
 # Smart classes
 #-----------------------------------------------------------------------------
@@ -300,9 +331,14 @@ class DisplayObject(object):
 
         self.data = data
         self.url = url
-        self.filename = None if filename is None else unicode(filename)
+        self.filename = None if filename is None else unicode_type(filename)
 
         self.reload()
+        self._check_data()
+    
+    def _check_data(self):
+        """Override in subclasses if there's something to check."""
+        pass
 
     def reload(self):
         """Reload the raw data from file or URL."""
@@ -311,8 +347,11 @@ class DisplayObject(object):
                 self.data = f.read()
         elif self.url is not None:
             try:
-                import urllib2
-                response = urllib2.urlopen(self.url)
+                try:
+                    from urllib.request import urlopen  # Py3
+                except ImportError:
+                    from urllib2 import urlopen
+                response = urlopen(self.url)
                 self.data = response.read()
                 # extract encoding from header, if there is one:
                 encoding = None
@@ -327,13 +366,19 @@ class DisplayObject(object):
             except:
                 self.data = None
 
-class Pretty(DisplayObject):
+class TextDisplayObject(DisplayObject):
+    """Validate that display data is text"""
+    def _check_data(self):
+        if self.data is not None and not isinstance(self.data, string_types):
+            raise TypeError("%s expects text, not %r" % (self.__class__.__name__, self.data))
+
+class Pretty(TextDisplayObject):
 
     def _repr_pretty_(self):
         return self.data
 
 
-class HTML(DisplayObject):
+class HTML(TextDisplayObject):
 
     def _repr_html_(self):
         return self.data
@@ -347,14 +392,14 @@ class HTML(DisplayObject):
         return self._repr_html_()
 
 
-class Math(DisplayObject):
+class Math(TextDisplayObject):
 
     def _repr_latex_(self):
         s = self.data.strip('$')
         return "$$%s$$" % s
 
 
-class Latex(DisplayObject):
+class Latex(TextDisplayObject):
 
     def _repr_latex_(self):
         return self.data
@@ -394,7 +439,7 @@ class SVG(DisplayObject):
         return self.data
 
 
-class JSON(DisplayObject):
+class JSON(TextDisplayObject):
 
     def _repr_json_(self):
         return self.data
@@ -411,7 +456,7 @@ lib_t1 = """$.getScript("%s", function () {
 lib_t2 = """});
 """
 
-class Javascript(DisplayObject):
+class Javascript(TextDisplayObject):
 
     def __init__(self, data=None, url=None, filename=None, lib=None, css=None):
         """Create a Javascript display object given raw data.
@@ -444,11 +489,11 @@ class Javascript(DisplayObject):
             The full URLs of the css files should be given. A single css URL
             can also be given as a string.
         """
-        if isinstance(lib, basestring):
+        if isinstance(lib, string_types):
             lib = [lib]
         elif lib is None:
             lib = []
-        if isinstance(css, basestring):
+        if isinstance(css, string_types):
             css = [css]
         elif css is None:
             css = []
@@ -508,9 +553,9 @@ class Image(DisplayObject):
     _ACCEPTABLE_EMBEDDINGS = [_FMT_JPEG, _FMT_PNG]
 
     def __init__(self, data=None, url=None, filename=None, format=u'png', embed=None, width=None, height=None, retina=False):
-        """Create a display an PNG/JPEG image given raw data.
+        """Create a PNG/JPEG image object given raw data.
 
-        When this object is returned by an expression or passed to the
+        When this object is returned by an input cell or passed to the
         display function, it will result in the image being displayed
         in the frontend.
 
@@ -590,7 +635,7 @@ class Image(DisplayObject):
             if data[:2] == _JPEG:
                 format = 'jpeg'
 
-        self.format = unicode(format).lower()
+        self.format = unicode_type(format).lower()
         self.embed = embed if embed is not None else (url is None)
 
         if self.embed and self.format not in self._ACCEPTABLE_EMBEDDINGS:
@@ -654,38 +699,81 @@ class Image(DisplayObject):
             return self._data_and_metadata()
 
     def _find_ext(self, s):
-        return unicode(s.split('.')[-1].lower())
+        return unicode_type(s.split('.')[-1].lower())
 
 
-def clear_output(stdout=True, stderr=True, other=True):
+def clear_output(wait=False):
     """Clear the output of the current cell receiving output.
-
-    Optionally, each of stdout/stderr or other non-stream data (e.g. anything
-    produced by display()) can be excluded from the clear event.
-
-    By default, everything is cleared.
 
     Parameters
     ----------
-    stdout : bool [default: True]
-        Whether to clear stdout.
-    stderr : bool [default: True]
-        Whether to clear stderr.
-    other : bool [default: True]
-        Whether to clear everything else that is not stdout/stderr
-        (e.g. figures,images,HTML, any result of display()).
-    """
+    wait : bool [default: false]
+        Wait to clear the output until new output is available to replace it."""
     from IPython.core.interactiveshell import InteractiveShell
     if InteractiveShell.initialized():
-        InteractiveShell.instance().display_pub.clear_output(
-            stdout=stdout, stderr=stderr, other=other,
-        )
+        InteractiveShell.instance().display_pub.clear_output(wait)
     else:
         from IPython.utils import io
-        if stdout:
-            print('\033[2K\r', file=io.stdout, end='')
-            io.stdout.flush()
-        if stderr:
-            print('\033[2K\r', file=io.stderr, end='')
-            io.stderr.flush()
+        print('\033[2K\r', file=io.stdout, end='')
+        io.stdout.flush()
+        print('\033[2K\r', file=io.stderr, end='')
+        io.stderr.flush()
+
+
+@skip_doctest
+def set_matplotlib_formats(*formats, **kwargs):
+    """Select figure formats for the inline backend. Optionally pass quality for JPEG.
+
+    For example, this enables PNG and JPEG output with a JPEG quality of 90%::
+
+        In [1]: set_matplotlib_formats('png', 'jpeg', quality=90)
+
+    To set this in your config files use the following::
+    
+        c.InlineBackend.figure_formats = {'png', 'jpeg'}
+        c.InlineBackend.print_figure_kwargs.update({'quality' : 90})
+
+    Parameters
+    ----------
+    *formats : strs
+        One or more figure formats to enable: 'png', 'retina', 'jpeg', 'svg', 'pdf'.
+    **kwargs :
+        Keyword args will be relayed to ``figure.canvas.print_figure``.
+    """
+    from IPython.core.interactiveshell import InteractiveShell
+    from IPython.core.pylabtools import select_figure_formats
+    from IPython.kernel.zmq.pylab.config import InlineBackend
+    # build kwargs, starting with InlineBackend config
+    kw = {}
+    cfg = InlineBackend.instance()
+    kw.update(cfg.print_figure_kwargs)
+    kw.update(**kwargs)
+    shell = InteractiveShell.instance()
+    select_figure_formats(shell, formats, **kw)
+
+@skip_doctest
+def set_matplotlib_close(close=True):
+    """Set whether the inline backend closes all figures automatically or not.
+    
+    By default, the inline backend used in the IPython Notebook will close all
+    matplotlib figures automatically after each cell is run. This means that
+    plots in different cells won't interfere. Sometimes, you may want to make
+    a plot in one cell and then refine it in later cells. This can be accomplished
+    by::
+    
+        In [1]: set_matplotlib_close(False)
+    
+    To set this in your config files use the following::
+    
+        c.InlineBackend.close_figures = False
+    
+    Parameters
+    ----------
+    close : bool
+        Should all matplotlib figures be automatically closed after each cell is
+        run?
+    """
+    from IPython.kernel.zmq.pylab.config import InlineBackend
+    cfg = InlineBackend.instance()
+    cfg.close_figures = close
 

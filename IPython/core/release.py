@@ -19,14 +19,14 @@ name = 'ipython'
 # IPython version information.  An empty _version_extra corresponds to a full
 # release.  'dev' as a _version_extra string means this is a development
 # version
-_version_major = 1
-_version_minor = 1
-_version_patch = 1
+_version_major = 2
+_version_minor = 0
+_version_patch = 0
 _version_extra = 'dev'
 # _version_extra = 'rc1'
 # _version_extra = ''  # Uncomment this for full releases
 
-codename = 'An Afternoon Hack'
+codename = 'Work in Progress'
 
 # Construct full version string from these.
 _ver = [_version_major, _version_minor, _version_patch]
@@ -39,7 +39,7 @@ version = __version__  # backwards compatibility name
 version_info = (_version_major, _version_minor, _version_patch, _version_extra)
 
 # Change this when incrementing the kernel protocol version
-kernel_protocol_version_info = (4, 0)
+kernel_protocol_version_info = (4, 1)
 
 description = "IPython: Productive Interactive Computing"
 
@@ -141,11 +141,8 @@ classifiers = [
     'License :: OSI Approved :: BSD License',
     'Programming Language :: Python',
     'Programming Language :: Python :: 2',
-    'Programming Language :: Python :: 2.6',
     'Programming Language :: Python :: 2.7',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.2',
-    'Programming Language :: Python :: 3.3',
     'Topic :: System :: Distributed Computing',
     'Topic :: System :: Shells'
     ]

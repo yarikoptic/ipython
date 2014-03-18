@@ -52,7 +52,7 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-
+import contextlib
 import inspect
 import re
 import sys
@@ -66,6 +66,8 @@ except:
 
 from .importstring import import_item
 from IPython.utils import py3compat
+from IPython.utils.py3compat import iteritems
+from IPython.testing.skipdoctest import skip_doctest
 
 SequenceTypes = (list, tuple, set, frozenset)
 
@@ -94,7 +96,7 @@ def class_of ( object ):
     correct indefinite article ('a' or 'an') preceding it (e.g., 'an Image',
     'a PlotValue').
     """
-    if isinstance( object, basestring ):
+    if isinstance( object, py3compat.string_types ):
         return add_article( object )
 
     return add_article( object.__class__.__name__ )
@@ -181,6 +183,60 @@ def getmembers(object, predicate=None):
     results.sort()
     return results
 
+@skip_doctest
+class link(object):
+    """Link traits from different objects together so they remain in sync.
+
+    Parameters
+    ----------
+    obj : pairs of objects/attributes
+
+    Examples
+    --------
+
+    >>> c = link((obj1, 'value'), (obj2, 'value'), (obj3, 'value'))
+    >>> obj1.value = 5 # updates other objects as well
+    """
+    updating = False
+    def __init__(self, *args):
+        if len(args) < 2:
+            raise TypeError('At least two traitlets must be provided.')
+
+        self.objects = {}
+        initial = getattr(args[0][0], args[0][1])
+        for obj,attr in args:
+            if getattr(obj, attr) != initial:
+                setattr(obj, attr, initial)
+
+            callback = self._make_closure(obj,attr)
+            obj.on_trait_change(callback, attr)
+            self.objects[(obj,attr)] = callback
+
+    @contextlib.contextmanager
+    def _busy_updating(self):
+        self.updating = True
+        try:
+            yield
+        finally:
+            self.updating = False
+
+    def _make_closure(self, sending_obj, sending_attr):
+        def update(name, old, new):
+            self._update(sending_obj, sending_attr, new)
+        return update
+
+    def _update(self, sending_obj, sending_attr, new):
+        if self.updating:
+            return
+        with self._busy_updating():
+            for obj,attr in self.objects.keys():
+                if obj is not sending_obj or attr != sending_attr:
+                    setattr(obj, attr, new)
+    
+    def unlink(self):
+        for key, callback in self.objects.items():
+            (obj,attr) = key
+            obj.on_trait_change(callback, attr, remove=True)
 
 #-----------------------------------------------------------------------------
 # Base TraitType for all traits
@@ -315,7 +371,14 @@ class TraitType(object):
         new_value = self._validate(obj, value)
         old_value = self.__get__(obj)
         obj._trait_values[self.name] = new_value
-        if old_value != new_value:
+        try:
+            silent = bool(old_value == new_value)
+        except:
+            # if there is an error in comparing, default to notify
+            silent = False
+        if silent is not True:
+            # we explicitly compare silent to True just in case the equality
+            # comparison above returns something other than True/False
             obj._notify_trait(self.name, old_value, new_value)
 
     def _validate(self, obj, value):
@@ -373,7 +436,7 @@ class MetaHasTraits(type):
         # print "MetaHasTraitlets (mcls, name): ", mcls, name
         # print "MetaHasTraitlets (bases): ", bases
         # print "MetaHasTraitlets (classdict): ", classdict
-        for k,v in classdict.iteritems():
+        for k,v in iteritems(classdict):
             if isinstance(v, TraitType):
                 v.name = k
             elif inspect.isclass(v):
@@ -389,14 +452,12 @@ class MetaHasTraits(type):
         This sets the :attr:`this_class` attribute of each TraitType in the
         class dict to the newly created class ``cls``.
         """
-        for k, v in classdict.iteritems():
+        for k, v in iteritems(classdict):
             if isinstance(v, TraitType):
                 v.this_class = cls
         super(MetaHasTraits, cls).__init__(name, bases, classdict)
 
-class HasTraits(object):
-
-    __metaclass__ = MetaHasTraits
+class HasTraits(py3compat.with_metaclass(MetaHasTraits, object)):
 
     def __new__(cls, *args, **kw):
         # This is needed because in Python 2.6 object.__new__ only accepts
@@ -429,15 +490,15 @@ class HasTraits(object):
         # Allow trait values to be set using keyword arguments.
         # We need to use setattr for this to trigger validation and
         # notifications.
-        for key, value in kw.iteritems():
+        for key, value in iteritems(kw):
             setattr(self, key, value)
 
     def _notify_trait(self, name, old_value, new_value):
 
         # First dynamic ones
-        callables = self._trait_notifiers.get(name,[])
-        more_callables = self._trait_notifiers.get('anytrait',[])
-        callables.extend(more_callables)
+        callables = []
+        callables.extend(self._trait_notifiers.get(name,[]))
+        callables.extend(self._trait_notifiers.get('anytrait',[]))
 
         # Now static ones
         try:
@@ -531,27 +592,33 @@ class HasTraits(object):
 
     @classmethod
     def class_trait_names(cls, **metadata):
-        """Get a list of all the names of this classes traits.
+        """Get a list of all the names of this class' traits.
 
-        This method is just like the :meth:`trait_names` method, but is unbound.
+        This method is just like the :meth:`trait_names` method,
+        but is unbound.
         """
         return cls.class_traits(**metadata).keys()
 
     @classmethod
     def class_traits(cls, **metadata):
-        """Get a list of all the traits of this class.
+        """Get a `dict` of all the traits of this class.  The dictionary
+        is keyed on the name and the values are the TraitType objects.
 
         This method is just like the :meth:`traits` method, but is unbound.
 
         The TraitTypes returned don't know anything about the values
         that the various HasTrait's instances are holding.
 
-        This follows the same algorithm as traits does and does not allow
-        for any simple way of specifying merely that a metadata name
-        exists, but has any value.  This is because get_metadata returns
-        None if a metadata key doesn't exist.
+        The metadata kwargs allow functions to be passed in which
+        filter traits based on metadata values.  The functions should
+        take a single value as an argument and return a boolean.  If
+        any function returns False, then the trait is not included in
+        the output.  This does not allow for any simple way of
+        testing that a metadata name exists and has any
+        value because get_metadata returns None if a metadata key
+        doesn't exist.
         """
-        traits = dict([memb for memb in getmembers(cls) if \
+        traits = dict([memb for memb in getmembers(cls) if
                      isinstance(memb[1], TraitType)])
 
         if len(metadata) == 0:
@@ -572,21 +639,26 @@ class HasTraits(object):
         return result
 
     def trait_names(self, **metadata):
-        """Get a list of all the names of this classes traits."""
+        """Get a list of all the names of this class' traits."""
         return self.traits(**metadata).keys()
 
     def traits(self, **metadata):
-        """Get a list of all the traits of this class.
+        """Get a `dict` of all the traits of this class.  The dictionary
+        is keyed on the name and the values are the TraitType objects.
 
         The TraitTypes returned don't know anything about the values
         that the various HasTrait's instances are holding.
 
-        This follows the same algorithm as traits does and does not allow
-        for any simple way of specifying merely that a metadata name
-        exists, but has any value.  This is because get_metadata returns
-        None if a metadata key doesn't exist.
+        The metadata kwargs allow functions to be passed in which
+        filter traits based on metadata values.  The functions should
+        take a single value as an argument and return a boolean.  If
+        any function returns False, then the trait is not included in
+        the output.  This does not allow for any simple way of
+        testing that a metadata name exists and has any
+        value because get_metadata returns None if a metadata key
+        doesn't exist.
         """
-        traits = dict([memb for memb in getmembers(self.__class__) if \
+        traits = dict([memb for memb in getmembers(self.__class__) if
                      isinstance(memb[1], TraitType)])
 
         if len(metadata) == 0:
@@ -680,7 +752,7 @@ class Type(ClassBasedTraitType):
         elif klass is None:
             klass = default_value
 
-        if not (inspect.isclass(klass) or isinstance(klass, basestring)):
+        if not (inspect.isclass(klass) or isinstance(klass, py3compat.string_types)):
             raise TraitError("A Type trait must specify a class.")
 
         self.klass       = klass
@@ -701,7 +773,7 @@ class Type(ClassBasedTraitType):
 
     def info(self):
         """ Returns a description of the trait."""
-        if isinstance(self.klass, basestring):
+        if isinstance(self.klass, py3compat.string_types):
             klass = self.klass
         else:
             klass = self.klass.__name__
@@ -715,9 +787,9 @@ class Type(ClassBasedTraitType):
         super(Type, self).instance_init(obj)
 
     def _resolve_classes(self):
-        if isinstance(self.klass, basestring):
+        if isinstance(self.klass, py3compat.string_types):
             self.klass = import_item(self.klass)
-        if isinstance(self.default_value, basestring):
+        if isinstance(self.default_value, py3compat.string_types):
             self.default_value = import_item(self.default_value)
 
     def get_default_value(self):
@@ -762,8 +834,8 @@ class Instance(ClassBasedTraitType):
         allow_none : bool
             Indicates whether None is allowed as a value.
 
-        Default Value
-        -------------
+        Notes
+        -----
         If both ``args`` and ``kw`` are None, then the default value is None.
         If ``args`` is a tuple and ``kw`` is a dict, then the default is
         created as ``klass(*args, **kw)``.  If either ``args`` or ``kw`` is
@@ -772,7 +844,7 @@ class Instance(ClassBasedTraitType):
 
         self._allow_none = allow_none
 
-        if (klass is None) or (not (inspect.isclass(klass) or isinstance(klass, basestring))):
+        if (klass is None) or (not (inspect.isclass(klass) or isinstance(klass, py3compat.string_types))):
             raise TraitError('The klass argument must be a class'
                                 ' you gave: %r' % klass)
         self.klass = klass
@@ -809,7 +881,7 @@ class Instance(ClassBasedTraitType):
             self.error(obj, value)
 
     def info(self):
-        if isinstance(self.klass, basestring):
+        if isinstance(self.klass, py3compat.string_types):
             klass = self.klass
         else:
             klass = self.klass.__name__
@@ -824,7 +896,7 @@ class Instance(ClassBasedTraitType):
         super(Instance, self).instance_init(obj)
 
     def _resolve_classes(self):
-        if isinstance(self.klass, basestring):
+        if isinstance(self.klass, py3compat.string_types):
             self.klass = import_item(self.klass)
 
     def get_default_value(self):
@@ -901,7 +973,7 @@ else:
     class Long(TraitType):
         """A long integer trait."""
 
-        default_value = 0L
+        default_value = 0
         info_text = 'a long'
 
         def validate(self, obj, value):
@@ -997,7 +1069,7 @@ class Bytes(TraitType):
     """A trait for byte strings."""
 
     default_value = b''
-    info_text = 'a string'
+    info_text = 'a bytes object'
 
     def validate(self, obj, value):
         if isinstance(value, bytes):
@@ -1022,10 +1094,14 @@ class Unicode(TraitType):
     info_text = 'a unicode string'
 
     def validate(self, obj, value):
-        if isinstance(value, unicode):
+        if isinstance(value, py3compat.unicode_type):
             return value
         if isinstance(value, bytes):
-            return unicode(value)
+            try:
+                return value.decode('ascii', 'strict')
+            except UnicodeDecodeError:
+                msg = "Could not decode {!r} for unicode trait '{}' of {} instance."
+                raise TraitError(msg.format(value, self.name, class_of(obj)))
         self.error(obj, value)
 
 
@@ -1034,7 +1110,7 @@ class CUnicode(Unicode):
 
     def validate(self, obj, value):
         try:
-            return unicode(value)
+            return py3compat.unicode_type(value)
         except:
             self.error(obj, value)
 
@@ -1131,7 +1207,7 @@ class CaselessStrEnum(Enum):
             if self._allow_none:
                 return value
 
-        if not isinstance(value, basestring):
+        if not isinstance(value, py3compat.string_types):
             self.error(obj, value)
 
         for v in self.values:
@@ -1145,6 +1221,7 @@ class Container(Instance):
     To be subclassed by overriding klass.
     """
     klass = None
+    _cast_types = ()
     _valid_defaults = SequenceTypes
     _trait = None
 
@@ -1208,6 +1285,8 @@ class Container(Instance):
         raise TraitError(e)
 
     def validate(self, obj, value):
+        if isinstance(value, self._cast_types):
+            value = self.klass(value)
         value = super(Container, self).validate(obj, value)
         if value is None:
             return value
@@ -1233,6 +1312,7 @@ class Container(Instance):
 class List(Container):
     """An instance of a Python list."""
     klass = list
+    _cast_types = (tuple,)
 
     def __init__(self, trait=None, default_value=None, minlen=0, maxlen=sys.maxsize,
                 allow_none=True, **metadata):
@@ -1289,15 +1369,27 @@ class List(Container):
             self.length_error(obj, value)
 
         return super(List, self).validate_elements(obj, value)
+    
+    def validate(self, obj, value):
+        value = super(List, self).validate(obj, value)
+        if value is None:
+            return value
+
+        value = self.validate_elements(obj, value)
+
+        return value
+        
 
 
-class Set(Container):
+class Set(List):
     """An instance of a Python set."""
     klass = set
+    _cast_types = (tuple, list)
 
 class Tuple(Container):
     """An instance of a Python tuple."""
     klass = tuple
+    _cast_types = (list,)
 
     def __init__(self, *traits, **metadata):
         """Tuple(*traits, default_value=None, allow_none=True, **medatata)
@@ -1418,7 +1510,7 @@ class TCPAddress(TraitType):
     def validate(self, obj, value):
         if isinstance(value, tuple):
             if len(value) == 2:
-                if isinstance(value[0], basestring) and isinstance(value[1], int):
+                if isinstance(value[0], py3compat.string_types) and isinstance(value[1], int):
                     port = value[1]
                     if port >= 0 and port <= 65535:
                         return value

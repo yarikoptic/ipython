@@ -20,7 +20,6 @@ from __future__ import division
 
 import time
 from datetime import datetime
-from tempfile import mktemp
 
 import zmq
 
@@ -30,7 +29,7 @@ from IPython.parallel import error
 from IPython.parallel import AsyncResult, AsyncHubResult
 from IPython.parallel import LoadBalancedView, DirectView
 
-from clienttest import ClusterTestCase, segfault, wait, add_engines
+from .clienttest import ClusterTestCase, segfault, wait, add_engines
 
 def setup():
     add_engines(4, total=True)
@@ -95,7 +94,7 @@ class TestClient(ClusterTestCase):
         
         def double(x):
             return x*2
-        seq = range(100)
+        seq = list(range(100))
         ref = [ double(x) for x in seq ]
         
         # add some engines, which should be used
@@ -196,7 +195,12 @@ class TestClient(ClusterTestCase):
         self.assertTrue(isinstance(allqs, dict))
         intkeys = list(allqs.keys())
         intkeys.remove('unassigned')
-        self.assertEqual(sorted(intkeys), sorted(self.client.ids))
+        print("intkeys", intkeys)
+        intkeys = sorted(intkeys)
+        ids = self.client.ids
+        print("client.ids", ids)
+        ids = sorted(self.client.ids)
+        self.assertEqual(intkeys, ids)
         unassigned = allqs.pop('unassigned')
         for eid,qs in allqs.items():
             self.assertTrue(isinstance(qs, dict))
@@ -301,8 +305,12 @@ class TestClient(ClusterTestCase):
         self.assertEqual(self.client.hub_history()[-1:],ar.msg_ids)
     
     def _wait_for_idle(self):
-        """wait for an engine to become idle, according to the Hub"""
+        """wait for the cluster to become idle, according to the everyone."""
         rc = self.client
+        
+        # step 0. wait for local results
+        # this should be sufficient 99% of the time.
+        rc.wait(timeout=5)
         
         # step 1. wait for all requests to be noticed
         # timeout 5s, polling every 100ms
@@ -321,7 +329,7 @@ class TestClient(ClusterTestCase):
         # timeout 5s, polling every 100ms
         qs = rc.queue_status()
         for i in range(50):
-            if qs['unassigned'] or any(qs[eid]['tasks'] for eid in rc.ids):
+            if qs['unassigned'] or any(qs[eid]['tasks'] + qs[eid]['queue'] for eid in qs if eid != 'unassigned'):
                 time.sleep(0.1)
                 qs = rc.queue_status()
             else:
@@ -329,8 +337,9 @@ class TestClient(ClusterTestCase):
         
         # ensure Hub up to date:
         self.assertEqual(qs['unassigned'], 0)
-        for eid in rc.ids:
+        for eid in [ eid for eid in qs if eid != 'unassigned' ]:
             self.assertEqual(qs[eid]['tasks'], 0)
+            self.assertEqual(qs[eid]['queue'], 0)
     
     
     def test_resubmit(self):
@@ -444,7 +453,32 @@ class TestClient(ClusterTestCase):
         self.client.purge_local_results(res[-1])
         self.assertEqual(len(self.client.results),before-len(res[-1]), msg="Not removed from results")
         self.assertEqual(len(self.client.metadata),before-len(res[-1]), msg="Not removed from metadata")
-        
+    
+    def test_purge_local_results_outstanding(self):
+        v = self.client[-1]
+        ar = v.apply_async(lambda : 1)
+        msg_id = ar.msg_ids[0]
+        ar.get()
+        self._wait_for_idle()
+        ar2 = v.apply_async(time.sleep, 1)
+        self.assertIn(msg_id, self.client.results)
+        self.assertIn(msg_id, self.client.metadata)
+        self.client.purge_local_results(ar)
+        self.assertNotIn(msg_id, self.client.results)
+        self.assertNotIn(msg_id, self.client.metadata)
+        with self.assertRaises(RuntimeError):
+            self.client.purge_local_results(ar2)
+        ar2.get()
+        self.client.purge_local_results(ar2)
+    
+    def test_purge_all_local_results_outstanding(self):
+        v = self.client[-1]
+        ar = v.apply_async(time.sleep, 1)
+        with self.assertRaises(RuntimeError):
+            self.client.purge_local_results('all')
+        ar.get()
+        self.client.purge_local_results('all')
+    
     def test_purge_all_hub_results(self):
         self.client.purge_hub_results('all')
         hist = self.client.hub_history()

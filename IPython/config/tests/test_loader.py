@@ -9,7 +9,7 @@ Authors:
 """
 
 #-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
+#  Copyright (C) 2008 The IPython Development Team
 #
 #  Distributed under the terms of the BSD License.  The full license is in
 #  the file COPYING, distributed as part of this software.
@@ -20,21 +20,27 @@ Authors:
 #-----------------------------------------------------------------------------
 
 import os
+import pickle
 import sys
+import json
+
 from tempfile import mkstemp
 from unittest import TestCase
 
 from nose import SkipTest
+import nose.tools as nt
 
-from IPython.testing.tools import mute_warn
+
 
 from IPython.config.loader import (
     Config,
+    LazyConfigValue,
     PyFileConfigLoader,
+    JSONFileConfigLoader,
     KeyValueConfigLoader,
     ArgParseConfigLoader,
     KVArgParseConfigLoader,
-    ConfigError
+    ConfigError,
 )
 
 #-----------------------------------------------------------------------------
@@ -51,21 +57,77 @@ c.Foo.Bam.value=list(range(10))  # list() is just so it's the same on Python 3
 c.D.C.value='hi there'
 """
 
-class TestPyFileCL(TestCase):
+json1file = """
+{
+  "version": 1,
+  "a": 10,
+  "b": 20,
+  "Foo": {
+    "Bam": {
+      "value": [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 ]
+    },
+    "Bar": {
+      "value": 10
+    }
+  },
+  "D": {
+    "C": {
+      "value": "hi there"
+    }
+  }
+}
+"""
 
-    def test_basic(self):
+# should not load
+json2file = """
+{
+  "version": 2
+}
+"""
+
+import logging
+log = logging.getLogger('devnull')
+log.setLevel(0)
+
+class TestFileCL(TestCase):
+
+    def _check_conf(self, config):
+        self.assertEqual(config.a, 10)
+        self.assertEqual(config.b, 20)
+        self.assertEqual(config.Foo.Bar.value, 10)
+        self.assertEqual(config.Foo.Bam.value, list(range(10)))
+        self.assertEqual(config.D.C.value, 'hi there')
+
+    def test_python(self):
         fd, fname = mkstemp('.py')
         f = os.fdopen(fd, 'w')
         f.write(pyfile)
         f.close()
         # Unlink the file
-        cl = PyFileConfigLoader(fname)
+        cl = PyFileConfigLoader(fname, log=log)
         config = cl.load_config()
-        self.assertEqual(config.a, 10)
-        self.assertEqual(config.b, 20)
-        self.assertEqual(config.Foo.Bar.value, 10)
-        self.assertEqual(config.Foo.Bam.value, range(10))
-        self.assertEqual(config.D.C.value, 'hi there')
+        self._check_conf(config)
+
+    def test_json(self):
+        fd, fname = mkstemp('.json')
+        f = os.fdopen(fd, 'w')
+        f.write(json1file)
+        f.close()
+        # Unlink the file
+        cl = JSONFileConfigLoader(fname, log=log)
+        config = cl.load_config()
+        self._check_conf(config)
+
+    def test_v2raise(self):
+        fd, fname = mkstemp('.json')
+        f = os.fdopen(fd, 'w')
+        f.write(json2file)
+        f.close()
+        # Unlink the file
+        cl = JSONFileConfigLoader(fname, log=log)
+        with nt.assert_raises(ValueError):
+            cl.load_config()
+
 
 class MyLoader1(ArgParseConfigLoader):
     def _add_arguments(self, aliases=None, flags=None):
@@ -93,8 +155,8 @@ class TestArgParseCL(TestCase):
         self.assertEqual(config.n, True)
         self.assertEqual(config.Global.bam, 'wow')
         config = cl.load_config(['wow'])
-        self.assertEqual(config.keys(), ['Global'])
-        self.assertEqual(config.Global.keys(), ['bam'])
+        self.assertEqual(list(config.keys()), ['Global'])
+        self.assertEqual(list(config.Global.keys()), ['bam'])
         self.assertEqual(config.Global.bam, 'wow')
 
     def test_add_arguments(self):
@@ -119,42 +181,37 @@ class TestKeyValueCL(TestCase):
     klass = KeyValueConfigLoader
 
     def test_basic(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = ['--'+s.strip('c.') for s in pyfile.split('\n')[2:-1]]
-        with mute_warn():
-            config = cl.load_config(argv)
+        config = cl.load_config(argv)
         self.assertEqual(config.a, 10)
         self.assertEqual(config.b, 20)
         self.assertEqual(config.Foo.Bar.value, 10)
-        self.assertEqual(config.Foo.Bam.value, range(10))
+        self.assertEqual(config.Foo.Bam.value, list(range(10)))
         self.assertEqual(config.D.C.value, 'hi there')
     
     def test_expanduser(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = ['--a=~/1/2/3', '--b=~', '--c=~/', '--d="~/"']
-        with mute_warn():
-            config = cl.load_config(argv)
+        config = cl.load_config(argv)
         self.assertEqual(config.a, os.path.expanduser('~/1/2/3'))
         self.assertEqual(config.b, os.path.expanduser('~'))
         self.assertEqual(config.c, os.path.expanduser('~/'))
         self.assertEqual(config.d, '~/')
     
     def test_extra_args(self):
-        cl = self.klass()
-        with mute_warn():
-            config = cl.load_config(['--a=5', 'b', '--c=10', 'd'])
+        cl = self.klass(log=log)
+        config = cl.load_config(['--a=5', 'b', '--c=10', 'd'])
         self.assertEqual(cl.extra_args, ['b', 'd'])
         self.assertEqual(config.a, 5)
         self.assertEqual(config.c, 10)
-        with mute_warn():
-            config = cl.load_config(['--', '--a=5', '--c=10'])
+        config = cl.load_config(['--', '--a=5', '--c=10'])
         self.assertEqual(cl.extra_args, ['--a=5', '--c=10'])
     
     def test_unicode_args(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = [u'--a=épsîlön']
-        with mute_warn():
-            config = cl.load_config(argv)
+        config = cl.load_config(argv)
         self.assertEqual(config.a, u'épsîlön')
     
     def test_unicode_bytes_args(self):
@@ -164,16 +221,14 @@ class TestKeyValueCL(TestCase):
         except (TypeError, UnicodeEncodeError):
             raise SkipTest("sys.stdin.encoding can't handle 'é'")
         
-        cl = self.klass()
-        with mute_warn():
-            config = cl.load_config([barg])
+        cl = self.klass(log=log)
+        config = cl.load_config([barg])
         self.assertEqual(config.a, u'é')
     
     def test_unicode_alias(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = [u'--a=épsîlön']
-        with mute_warn():
-            config = cl.load_config(argv, aliases=dict(a='A.a'))
+        config = cl.load_config(argv, aliases=dict(a='A.a'))
         self.assertEqual(config.A.a, u'épsîlön')
 
 
@@ -181,18 +236,16 @@ class TestArgParseKVCL(TestKeyValueCL):
     klass = KVArgParseConfigLoader
 
     def test_expanduser2(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = ['-a', '~/1/2/3', '--b', "'~/1/2/3'"]
-        with mute_warn():
-            config = cl.load_config(argv, aliases=dict(a='A.a', b='A.b'))
+        config = cl.load_config(argv, aliases=dict(a='A.a', b='A.b'))
         self.assertEqual(config.A.a, os.path.expanduser('~/1/2/3'))
         self.assertEqual(config.A.b, '~/1/2/3')
     
     def test_eval(self):
-        cl = self.klass()
+        cl = self.klass(log=log)
         argv = ['-c', 'a=5']
-        with mute_warn():
-            config = cl.load_config(argv, aliases=dict(c='A.c'))
+        config = cl.load_config(argv, aliases=dict(c='A.c'))
         self.assertEqual(config.A.c, u"a=5")
     
 
@@ -206,14 +259,15 @@ class TestConfig(TestCase):
 
     def test_auto_section(self):
         c = Config()
-        self.assertEqual('A' in c, True)
-        self.assertEqual(c._has_section('A'), False)
+        self.assertNotIn('A', c)
+        assert not c._has_section('A')
         A = c.A
         A.foo = 'hi there'
-        self.assertEqual(c._has_section('A'), True)
+        self.assertIn('A', c)
+        assert c._has_section('A')
         self.assertEqual(c.A.foo, 'hi there')
         del c.A
-        self.assertEqual(len(c.A.keys()),0)
+        self.assertEqual(c.A, Config())
 
     def test_merge_doesnt_exist(self):
         c1 = Config()
@@ -256,8 +310,6 @@ class TestConfig(TestCase):
 
     def test_builtin(self):
         c1 = Config()
-        exec 'foo = True' in c1
-        self.assertEqual(c1.foo, True)
         c1.format = "json"
     
     def test_fromdict(self):
@@ -279,4 +331,66 @@ class TestConfig(TestCase):
         self.assertEqual(c1.Foo.__class__, Config)
         self.assertEqual(c1.Foo.bar, 1)
         self.assertEqual(c1.Foo.baz, 2)
-        self.assertRaises(AttributeError, getattr, c2.Foo, 'baz')
+        self.assertNotIn('baz', c2.Foo)
+    
+    def test_contains(self):
+        c1 = Config({'Foo' : {'baz' : 2}})
+        c2 = Config({'Foo' : {'bar' : 1}})
+        self.assertIn('Foo', c1)
+        self.assertIn('Foo.baz', c1)
+        self.assertIn('Foo.bar', c2)
+        self.assertNotIn('Foo.bar', c1)
+    
+    def test_pickle_config(self):
+        cfg = Config()
+        cfg.Foo.bar = 1
+        pcfg = pickle.dumps(cfg)
+        cfg2 = pickle.loads(pcfg)
+        self.assertEqual(cfg2, cfg)
+    
+    def test_getattr_section(self):
+        cfg = Config()
+        self.assertNotIn('Foo', cfg)
+        Foo = cfg.Foo
+        assert isinstance(Foo, Config)
+        self.assertIn('Foo', cfg)
+
+    def test_getitem_section(self):
+        cfg = Config()
+        self.assertNotIn('Foo', cfg)
+        Foo = cfg['Foo']
+        assert isinstance(Foo, Config)
+        self.assertIn('Foo', cfg)
+
+    def test_getattr_not_section(self):
+        cfg = Config()
+        self.assertNotIn('foo', cfg)
+        foo = cfg.foo
+        assert isinstance(foo, LazyConfigValue)
+        self.assertIn('foo', cfg)
+
+    def test_getattr_private_missing(self):
+        cfg = Config()
+        self.assertNotIn('_repr_html_', cfg)
+        with self.assertRaises(AttributeError):
+            _ = cfg._repr_html_
+        self.assertNotIn('_repr_html_', cfg)
+        self.assertEqual(len(cfg), 0)
+
+    def test_getitem_not_section(self):
+        cfg = Config()
+        self.assertNotIn('foo', cfg)
+        foo = cfg['foo']
+        assert isinstance(foo, LazyConfigValue)
+        self.assertIn('foo', cfg)
+    
+    def test_merge_copies(self):
+        c = Config()
+        c2 = Config()
+        c2.Foo.trait = []
+        c.merge(c2)
+        c2.Foo.trait.append(1)
+        self.assertIsNot(c.Foo, c2.Foo)
+        self.assertEqual(c.Foo.trait, [])
+        self.assertEqual(c2.Foo.trait, [1])
+

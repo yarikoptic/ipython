@@ -19,7 +19,10 @@ templates.
 import os
 import re
 import textwrap
-from urllib2 import quote
+try:
+    from urllib.parse import quote  # Py 3
+except ImportError:
+    from urllib2 import quote  # Py 2
 from xml.etree import ElementTree
 
 from IPython.core.interactiveshell import InteractiveShell
@@ -40,6 +43,8 @@ __all__ = [
     'ipython2python',
     'posix_path',
     'path2url',
+    'add_prompts',
+    'ascii_only',
 ]
 
 
@@ -68,7 +73,11 @@ def html2text(element):
     Analog of jQuery's $(element).text()
     """
     if isinstance(element, py3compat.string_types):
-        element = ElementTree.fromstring(element)
+        try:
+            element = ElementTree.fromstring(element)
+        except Exception:
+            # failed to parse, just return it unmodified
+            return element
     
     text = element.text or ""
     for child in element:
@@ -82,7 +91,11 @@ def add_anchor(html):
     
     For use in heading cells
     """
-    h = ElementTree.fromstring(py3compat.cast_bytes_py2(html, encoding='utf-8'))
+    try:
+        h = ElementTree.fromstring(py3compat.cast_bytes_py2(html, encoding='utf-8'))
+    except Exception:
+        # failed to parse, just return it unmodified
+        return html
     link = html2text(h).replace(' ', '-')
     h.set('id', link)
     a = ElementTree.Element("a", {"class" : "anchor-link", "href" : "#" + link})
@@ -95,6 +108,16 @@ def add_anchor(html):
     return py3compat.decode(ElementTree.tostring(h), 'utf-8')
 
 
+def add_prompts(code, first='>>> ', cont='... '):
+    """Add prompts to code snippets"""
+    new_code = []
+    code_list = code.split('\n')
+    new_code.append(first + code_list[0])
+    for line in code_list[1:]:
+        new_code.append(cont + line)
+    return '\n'.join(new_code)
+
+    
 def strip_dollars(text):
     """
     Remove all dollar symbols from text
@@ -108,19 +131,22 @@ def strip_dollars(text):
     return text.strip('$')
 
 
-files_url_pattern = re.compile(r'(src|href)\=([\'"]?)files/')
+files_url_pattern = re.compile(r'(src|href)\=([\'"]?)/?files/')
+markdown_url_pattern = re.compile(r'(!?)\[(?P<caption>.*?)\]\(/?files/(?P<location>.*?)\)')
 
 def strip_files_prefix(text):
     """
-    Fix all fake URLs that start with `files/`,
-    stripping out the `files/` prefix.
+    Fix all fake URLs that start with `files/`, stripping out the `files/` prefix.
+    Applies to both urls (for html) and relative paths (for markdown paths).
     
     Parameters
     ----------
     text : str
         Text in which to replace 'src="files/real...' with 'src="real...'
     """
-    return files_url_pattern.sub(r"\1=\2", text)
+    cleaned_text = files_url_pattern.sub(r"\1=\2", text)
+    cleaned_text = markdown_url_pattern.sub(r'\1[\2](\3)', cleaned_text)
+    return cleaned_text
 
 
 def comment_lines(text, prefix='# '):
@@ -188,3 +214,8 @@ def path2url(path):
     """Turn a file path into a URL"""
     parts = path.split(os.path.sep)
     return '/'.join(quote(part) for part in parts)
+
+def ascii_only(s):
+    """ensure a string is ascii"""
+    s = py3compat.cast_unicode(s)
+    return s.encode('ascii', 'replace').decode('ascii')

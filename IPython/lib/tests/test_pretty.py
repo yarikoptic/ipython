@@ -58,6 +58,27 @@ class NoModule(object):
 
 NoModule.__module__ = None
 
+class Breaking(object):
+    def _repr_pretty_(self, p, cycle):
+        with p.group(4,"TG: ",":"):
+            p.text("Breaking(")
+            p.break_()
+            p.text(")")
+
+class BreakingRepr(object):
+    def __repr__(self):
+        return "Breaking(\n)"
+
+class BreakingReprParent(object):
+    def _repr_pretty_(self, p, cycle):
+        with p.group(4,"TG: ",":"):
+            p.pretty(BreakingRepr())
+
+class BadRepr(object):
+    
+    def __repr__(self):
+        return 1/0
+
 
 def test_indentation():
     """Test correct indentation in groups"""
@@ -118,3 +139,61 @@ def test_pprint_nomod():
     """
     output = pretty.pretty(NoModule)
     nt.assert_equal(output, 'NoModule')
+    
+def test_pprint_break():
+    """
+    Test that p.break_ produces expected output
+    """
+    output = pretty.pretty(Breaking())
+    expected = "TG: Breaking(\n    ):"
+    nt.assert_equal(output, expected)
+
+def test_pprint_break_repr():
+    """
+    Test that p.break_ is used in repr
+    """
+    output = pretty.pretty(BreakingReprParent())
+    expected = "TG: Breaking(\n    ):"
+    nt.assert_equal(output, expected)
+
+def test_bad_repr():
+    """Don't raise, even when repr fails"""
+    output = pretty.pretty(BadRepr())
+    nt.assert_in("failed", output)
+    nt.assert_in("at 0x", output)
+    nt.assert_in("test_pretty", output)
+
+class BadException(Exception):
+    def __str__(self):
+        return -1
+
+class ReallyBadRepr(object):
+    __module__ = 1
+    @property
+    def __class__(self):
+        raise ValueError("I am horrible")
+    
+    def __repr__(self):
+        raise BadException()
+
+def test_really_bad_repr():
+    output = pretty.pretty(ReallyBadRepr())
+    nt.assert_in("failed", output)
+    nt.assert_in("BadException: unknown", output)
+    nt.assert_in("unknown type", output)
+
+
+class SA(object):
+    pass
+
+class SB(SA):
+    pass
+
+def test_super_repr():
+    output = pretty.pretty(super(SA))
+    nt.assert_in("SA", output)
+
+    sb = SB()
+    output = pretty.pretty(super(SA, sb))
+    nt.assert_in("SA", output)
+    

@@ -88,6 +88,13 @@ def unquote_filename(name, win32=(sys.platform=='win32')):
             name = name[1:-1]
     return name
 
+def compress_user(path):
+    """Reverse of :func:`os.path.expanduser`
+    """
+    home = os.path.expanduser('~')
+    if path.startswith(home):
+        path =  "~" + path[len(home):]
+    return path
 
 def get_py_filename(name, force_win32=None):
     """Return a valid python filename in the current directory.
@@ -155,11 +162,11 @@ def filefind(filename, path_dirs=None):
 
     if path_dirs is None:
         path_dirs = ("",)
-    elif isinstance(path_dirs, basestring):
+    elif isinstance(path_dirs, py3compat.string_types):
         path_dirs = (path_dirs,)
 
     for path in path_dirs:
-        if path == '.': path = os.getcwdu()
+        if path == '.': path = py3compat.getcwd()
         testname = expand_path(os.path.join(path, filename))
         if os.path.isfile(testname):
             return os.path.abspath(testname)
@@ -199,7 +206,10 @@ def get_home_dir(require_writable=False):
     if not _writable_dir(homedir) and os.name == 'nt':
         # expanduser failed, use the registry to get the 'My Documents' folder.
         try:
-            import _winreg as wreg
+            try:
+                import winreg as wreg  # Py 3
+            except ImportError:
+                import _winreg as wreg  # Py 2
             key = wreg.OpenKey(
                 wreg.HKEY_CURRENT_USER,
                 "Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
@@ -263,7 +273,6 @@ def get_ipython_dir():
 
 
     ipdir_def = '.ipython'
-    xdg_def = 'ipython'
 
     home_dir = get_home_dir()
     xdg_dir = get_xdg_dir()
@@ -274,20 +283,21 @@ def get_ipython_dir():
                       'Please use IPYTHONDIR instead.')
     ipdir = env.get('IPYTHONDIR', env.get('IPYTHON_DIR', None))
     if ipdir is None:
-        # not set explicitly, use XDG_CONFIG_HOME or HOME
-        home_ipdir = pjoin(home_dir, ipdir_def)
+        # not set explicitly, use ~/.ipython
+        ipdir = pjoin(home_dir, ipdir_def)
         if xdg_dir:
-            # use XDG, as long as the user isn't already
-            # using $HOME/.ipython and *not* XDG/ipython
+            # Several IPython versions (up to 1.x) defaulted to .config/ipython
+            # on Linux. We have decided to go back to using .ipython everywhere
+            xdg_ipdir = pjoin(xdg_dir, 'ipython')
 
-            xdg_ipdir = pjoin(xdg_dir, xdg_def)
-
-            if _writable_dir(xdg_ipdir) or not _writable_dir(home_ipdir):
-                ipdir = xdg_ipdir
-
-        if ipdir is None:
-            # not using XDG
-            ipdir = home_ipdir
+            if _writable_dir(xdg_ipdir):
+                cu = compress_user
+                if os.path.exists(ipdir):
+                    warnings.warn(('Ignoring {0} in favour of {1}. Remove {0} '
+                    'to get rid of this message').format(cu(xdg_ipdir), cu(ipdir)))
+                else:
+                    warnings.warn('Moving {0} to {1}'.format(cu(xdg_ipdir), cu(ipdir)))
+                    os.rename(xdg_ipdir, ipdir)
 
     ipdir = os.path.normpath(os.path.expanduser(ipdir))
 

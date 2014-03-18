@@ -10,7 +10,7 @@ largely feels like a terminal, but provides a number of enhancements only
 possible in a GUI, such as inline figures, proper multiline editing with syntax
 highlighting, graphical calltips, and much more.
 
-.. figure:: ../../_images/qtconsole.png
+.. figure:: ../_images/qtconsole.png
     :width: 400px
     :alt: IPython Qt console with embedded plots
     :align: center
@@ -593,6 +593,35 @@ Now the QApplication itself holds a reference to ``win``, so it will never be
 garbage collected until the application itself is destroyed.
 
 .. _Gotchas: http://www.riverbankcomputing.co.uk/static/Docs/PyQt4/html/gotchas.html#garbage-collection
+
+Embedding the QtConsole in a Qt application
+*******************************************
+
+In order to make the QtConsole available to an external Qt GUI application (just as
+:func:`IPython.embed` enables one to embed a terminal session of IPython in a
+command-line application), there are a few options:
+
+* First start IPython, and then start the external Qt application from IPython,
+  as described above.  Effectively, this embeds your application in IPython
+  rather than the other way round.
+
+* Use :class:`IPython.qt.console.rich_ipython_widget.RichIPythonWidget` in your
+  Qt application. This will embed the console widget in your GUI and start the
+  kernel in a separate process, so code typed into the console cannot access
+  objects in your application.
+
+* Start a standard IPython kernel in the process of the external Qt
+  application.  See :file:`examples/lib/ipkernel_qtapp.py` for an example.  Due
+  to IPython's two-process model, the QtConsole itself will live in another
+  process with its own QApplication, and thus cannot be embedded in the main
+  GUI.
+
+* Start a special IPython kernel, the
+  :class:`IPython.kernel.inprocess.ipkernel.InProcessKernel`, that allows a
+  QtConsole in the same process. See :file:`examples/inprocess/embedded_qtconsole.py`
+  for an example. While the QtConsole can now be embedded in the main GUI, one
+  cannot connect to the kernel from other consoles as there are no real ZMQ
+  sockets anymore.
 
 Regressions
 ===========

@@ -1,6 +1,4 @@
-"""
-Contains slide show exporter
-"""
+"""HTML slide show Exporter class"""
 
 #-----------------------------------------------------------------------------
 # Copyright (c) 2013, the IPython Development Team.
@@ -14,39 +12,32 @@ Contains slide show exporter
 # Imports
 #-----------------------------------------------------------------------------
 
-from IPython.utils.traitlets import Unicode
-
-from IPython.nbconvert import transformers
+from IPython.nbconvert import preprocessors
 from IPython.config import Config
 
-from .exporter import Exporter
+from .html import HTMLExporter
 
 #-----------------------------------------------------------------------------
 # Classes
 #-----------------------------------------------------------------------------
 
-class SlidesExporter(Exporter):
-    """
-    Exports slides
-    """
+class SlidesExporter(HTMLExporter):
+    """Exports HTML slides with reveal.js"""
     
-    file_extension = Unicode(
-        'slides.html', config=True, 
-        help="Extension of the file that should be written to disk"
-        )
+    def _file_extension_default(self):
+        return 'slides.html'
 
-    default_template = Unicode('reveal', config=True, help="""Template of the 
-        data format to use.  I.E. 'reveal'""")
+    def _template_file_default(self):
+        return 'slides_reveal'
+
+    output_mimetype = 'text/html'
 
     @property
     def default_config(self):
         c = Config({
-            'CSSHTMLHeaderTransformer':{
-                'enabled':True
+            'RevealHelpPreprocessor': {
+                'enabled': True,
                 },
-            'RevealHelpTransformer':{
-                'enabled':True,
-                },                
             })
         c.merge(super(SlidesExporter,self).default_config)
         return c

@@ -23,16 +23,15 @@ import subprocess
 from io import BytesIO
 import base64
 
-from Queue import Empty
-
 try:
-    from contextlib import nested
-except:
-    from IPython.utils.nested_context import nested
+    from queue import Empty  # Py 3
+except ImportError:
+    from Queue import Empty  # Py 2
 
 from IPython.core import page
 from IPython.utils.warn import warn, error
 from IPython.utils import io
+from IPython.utils.py3compat import string_types, input
 from IPython.utils.traitlets import List, Enum, Any, Instance, Unicode, Float
 from IPython.utils.tempdir import NamedFileInTemporaryDirectory
 
@@ -122,7 +121,7 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
 
         This creates completion machinery that can be used by client code,
         either interactively in-process (typically triggered by the readline
-        library), programatically (such as in test suites) or out-of-prcess
+        library), programmatically (such as in test suites) or out-of-process
         (typically over the network by remote frontends).
         """
         from IPython.core.completerlib import (module_completer,
@@ -142,6 +141,11 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
         if self.has_readline:
             self.set_readline_completer()
     
+    def ask_exit(self):
+        super(ZMQTerminalInteractiveShell, self).ask_exit()
+        if self.exit_now and self.manager:
+            self.client.shutdown()
+    
     def run_cell(self, cell, store_history=True):
         """Run a complete IPython cell.
         
@@ -155,6 +159,8 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
           should be set to False.
         """
         if (not cell) or cell.isspace():
+            # pressing enter flushes any pending display
+            self.handle_iopub()
             return
 
         if cell.strip() == 'exit':
@@ -176,7 +182,6 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
             except Empty:
                 # display intermediate print statements, etc.
                 self.handle_iopub(msg_id)
-                pass
         
         # after all of that is done, wait for the execute reply
         while self.client.is_alive():
@@ -218,26 +223,22 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
             self.execution_count = int(content["execution_count"] + 1)
 
 
-    def handle_iopub(self, msg_id):
-        """ Method to process subscribe channel's messages
+    def handle_iopub(self, msg_id=''):
+        """Process messages on the IOPub channel
 
            This method consumes and processes messages on the IOPub channel,
            such as stdout, stderr, pyout and status.
            
-           It only displays output that is caused by the given msg_id
+           It only displays output that is caused by this session.
         """
         while self.client.iopub_channel.msg_ready():
             sub_msg = self.client.iopub_channel.get_msg()
             msg_type = sub_msg['header']['msg_type']
             parent = sub_msg["parent_header"]
-            if (not parent) or msg_id == parent['msg_id']:
+            
+            if parent.get("session", self.session_id) == self.session_id:
                 if msg_type == 'status':
-                    state = self._execution_state = sub_msg["content"]["execution_state"]
-                    # idle messages mean an individual sequence is complete,
-                    # so break out of consumption to allow other things to take over.
-                    if state == 'idle':
-                        break
-
+                    self._execution_state = sub_msg["content"]["execution_state"]
                 elif msg_type == 'stream':
                     if sub_msg["content"]["name"] == "stdout":
                         print(sub_msg["content"]["data"], file=io.stdout, end="")
@@ -259,8 +260,12 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
                     hook.finish_displayhook()
 
                 elif msg_type == 'display_data':
-                    self.handle_rich_data(sub_msg["content"]["data"])
-                    
+                    data = sub_msg["content"]["data"]
+                    handled = self.handle_rich_data(data)
+                    if not handled:
+                        # if it was an image, we handled it by now
+                        if 'text/plain' in data:
+                            print(data['text/plain'])
 
     _imagemime = {
         'image/png': 'png',
@@ -272,7 +277,7 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
         for mime in self.mime_preference:
             if mime in data and mime in self._imagemime:
                 self.handle_image(data, mime)
-                return
+                return True
 
     def handle_image(self, data, mime):
         handler = getattr(
@@ -303,8 +308,8 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
         raw = base64.decodestring(data[mime].encode('ascii'))
         imageformat = self._imagemime[mime]
         filename = 'tmp.{0}'.format(imageformat)
-        with nested(NamedFileInTemporaryDirectory(filename),
-                    open(os.devnull, 'w')) as (f, devnull):
+        with NamedFileInTemporaryDirectory(filename) as f, \
+                    open(os.devnull, 'w') as devnull:
             f.write(raw)
             f.flush()
             fmt = dict(file=f.name, format=imageformat)
@@ -331,7 +336,7 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
             signal.signal(signal.SIGINT, double_int)
             
             try:
-                raw_data = raw_input(msg_rep["content"]["prompt"])
+                raw_data = input(msg_rep["content"]["prompt"])
             except EOFError:
                 # turn EOFError into EOF character
                 raw_data = '\x04'
@@ -392,7 +397,7 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
         if display_banner is None:
             display_banner = self.display_banner
         
-        if isinstance(display_banner, basestring):
+        if isinstance(display_banner, string_types):
             self.show_banner(display_banner)
         elif display_banner:
             self.show_banner()
@@ -456,7 +461,7 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
                 #double-guard against keyboardinterrupts during kbdint handling
                 try:
                     self.write('\nKeyboardInterrupt\n')
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     hlen_b4_cell = self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
                     more = False
                 except KeyboardInterrupt:
@@ -478,13 +483,18 @@ class ZMQTerminalInteractiveShell(TerminalInteractiveShell):
                 # asynchronously by signal handlers, for example.
                 self.showtraceback()
             else:
-                self.input_splitter.push(line)
-                more = self.input_splitter.push_accepts_more()
+                try:
+                    self.input_splitter.push(line)
+                    more = self.input_splitter.push_accepts_more()
+                except SyntaxError:
+                    # Run the code directly - run_cell takes care of displaying
+                    # the exception.
+                    more = False
                 if (self.SyntaxTB.last_syntax_error and
                     self.autoedit_syntax):
                     self.edit_syntax_error()
                 if not more:
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     hlen_b4_cell = self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
                     self.run_cell(source_raw)
                 

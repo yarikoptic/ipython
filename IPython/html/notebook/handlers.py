@@ -20,72 +20,71 @@ import os
 from tornado import web
 HTTPError = web.HTTPError
 
-from ..base.handlers import IPythonHandler
-from ..utils import url_path_join
+from ..base.handlers import IPythonHandler, notebook_path_regex, path_regex
+from ..utils import url_path_join, url_escape
 
 #-----------------------------------------------------------------------------
 # Handlers
 #-----------------------------------------------------------------------------
 
 
-class NewHandler(IPythonHandler):
+class NotebookHandler(IPythonHandler):
 
     @web.authenticated
-    def get(self):
-        notebook_id = self.notebook_manager.new_notebook()
-        self.redirect(url_path_join(self.base_project_url, notebook_id))
-
-
-class NamedNotebookHandler(IPythonHandler):
-
-    @web.authenticated
-    def get(self, notebook_id):
+    def get(self, path='', name=None):
+        """get renders the notebook template if a name is given, or 
+        redirects to the '/files/' handler if the name is not given."""
+        path = path.strip('/')
         nbm = self.notebook_manager
-        if not nbm.notebook_exists(notebook_id):
-            raise web.HTTPError(404, u'Notebook does not exist: %s' % notebook_id)       
+        if name is None:
+            raise web.HTTPError(500, "This shouldn't be accessible: %s" % self.request.uri)
+        
+        # a .ipynb filename was given
+        if not nbm.notebook_exists(name, path):
+            raise web.HTTPError(404, u'Notebook does not exist: %s/%s' % (path, name))
+        name = url_escape(name)
+        path = url_escape(path)
         self.write(self.render_template('notebook.html',
-            project=self.project,
-            notebook_id=notebook_id,
+            project=self.project_dir,
+            notebook_path=path,
+            notebook_name=name,
             kill_kernel=False,
             mathjax_url=self.mathjax_url,
             )
         )
 
-
 class NotebookRedirectHandler(IPythonHandler):
-    
-    @web.authenticated
-    def get(self, notebook_name):
-        # strip trailing .ipynb:
-        notebook_name = os.path.splitext(notebook_name)[0]
-        notebook_id = self.notebook_manager.rev_mapping.get(notebook_name, '')
-        if notebook_id:
-            url = url_path_join(self.settings.get('base_project_url', '/'), notebook_id)
-            return self.redirect(url)
+    def get(self, path=''):
+        nbm = self.notebook_manager
+        if nbm.path_exists(path):
+            # it's a *directory*, redirect to /tree
+            url = url_path_join(self.base_url, 'tree', path)
         else:
-            raise HTTPError(404)
-
-
-class NotebookCopyHandler(IPythonHandler):
-
-    @web.authenticated
-    def get(self, notebook_id):
-        notebook_id = self.notebook_manager.copy_notebook(notebook_id)
-        self.redirect(url_path_join(self.base_project_url, notebook_id))
-
+            # otherwise, redirect to /files
+            if '/files/' in path:
+                # redirect without files/ iff it would 404
+                # this preserves pre-2.0-style 'files/' links
+                # FIXME: this is hardcoded based on notebook_path,
+                # but so is the files handler itself,
+                # so it should work until both are cleaned up.
+                parts = path.split('/')
+                files_path = os.path.join(nbm.notebook_dir, *parts)
+                self.log.warn("filespath: %s", files_path)
+                if not os.path.exists(files_path):
+                    path = path.replace('/files/', '/', 1)
+            
+            url = url_path_join(self.base_url, 'files', path)
+        url = url_escape(url)
+        self.log.debug("Redirecting %s to %s", self.request.path, url)
+        self.redirect(url)
 
 #-----------------------------------------------------------------------------
 # URL to handler mappings
 #-----------------------------------------------------------------------------
 
 
-_notebook_id_regex = r"(?P<notebook_id>\w+-\w+-\w+-\w+-\w+)"
-_notebook_name_regex = r"(?P<notebook_name>.+\.ipynb)"
-
 default_handlers = [
-    (r"/new", NewHandler),
-    (r"/%s" % _notebook_id_regex, NamedNotebookHandler),
-    (r"/%s" % _notebook_name_regex, NotebookRedirectHandler),
-    (r"/%s/copy" % _notebook_id_regex, NotebookCopyHandler),
-
+    (r"/notebooks%s" % notebook_path_regex, NotebookHandler),
+    (r"/notebooks%s" % path_regex, NotebookRedirectHandler),
 ]
+

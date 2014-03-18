@@ -10,6 +10,7 @@
 //============================================================================
 
 var IPython = (function (IPython) {
+    "use strict";
 
     var utils = IPython.utils;
 
@@ -45,13 +46,18 @@ var IPython = (function (IPython) {
             that.update_notebook_name();
             that.update_document_title();
         });
+        $([IPython.events]).on('notebook_renamed.Notebook', function () {
+            that.update_notebook_name();
+            that.update_document_title();
+            that.update_address_bar();
+        });
         $([IPython.events]).on('notebook_save_failed.Notebook', function () {
             that.set_save_status('Autosave Failed!');
         });
         $([IPython.events]).on('checkpoints_listed.Notebook', function (event, data) {
             that.set_last_checkpoint(data[0]);
         });
-        
+
         $([IPython.events]).on('checkpoint_created.Notebook', function (event, data) {
             that.set_last_checkpoint(data);
         });
@@ -65,7 +71,7 @@ var IPython = (function (IPython) {
         var that = this;
         var dialog = $('<div/>').append(
             $("<p/>").addClass("rename-message")
-                .html('Enter a new notebook name:')
+                .text('Enter a new notebook name:')
         ).append(
             $("<br/>")
         ).append(
@@ -82,15 +88,14 @@ var IPython = (function (IPython) {
                     click: function () {
                     var new_name = $(this).find('input').val();
                     if (!IPython.notebook.test_notebook_name(new_name)) {
-                        $(this).find('.rename-message').html(
+                        $(this).find('.rename-message').text(
                             "Invalid notebook name. Notebook names must "+
                             "have 1 or more characters and can contain any characters " +
                             "except :/\\. Please enter a new notebook name:"
                         );
                         return false;
                     } else {
-                        IPython.notebook.set_notebook_name(new_name);
-                        IPython.notebook.save_notebook();
+                        IPython.notebook.rename(new_name);
                     }
                 }}
                 },
@@ -98,12 +103,12 @@ var IPython = (function (IPython) {
                 var that = $(this);
                 // Upon ENTER, click the OK button.
                 that.find('input[type="text"]').keydown(function (event, ui) {
-                    if (event.which === utils.keycodes.ENTER) {
+                    if (event.which === IPython.keyboard.keycodes.enter) {
                         that.find('.btn-primary').first().click();
                         return false;
                     }
                 });
-                that.find('input[type="text"]').focus();
+                that.find('input[type="text"]').focus().select();
             }
         });
     }
@@ -111,7 +116,7 @@ var IPython = (function (IPython) {
 
     SaveWidget.prototype.update_notebook_name = function () {
         var nbname = IPython.notebook.get_notebook_name();
-        this.element.find('span#notebook_name').html(nbname);
+        this.element.find('span#notebook_name').text(nbname);
     };
 
 
@@ -119,14 +124,27 @@ var IPython = (function (IPython) {
         var nbname = IPython.notebook.get_notebook_name();
         document.title = nbname;
     };
+    
+    SaveWidget.prototype.update_address_bar = function(){
+        var base_url = IPython.notebook.base_url;
+        var nbname = IPython.notebook.notebook_name;
+        var path = IPython.notebook.notebook_path;
+        var state = {path : path, name: nbname};
+        window.history.replaceState(state, "", utils.url_join_encode(
+            base_url,
+            "notebooks",
+            path,
+            nbname)
+        );
+    };
 
 
     SaveWidget.prototype.set_save_status = function (msg) {
-        this.element.find('span#autosave_status').html(msg);
+        this.element.find('span#autosave_status').text(msg);
     }
 
     SaveWidget.prototype.set_checkpoint_status = function (msg) {
-        this.element.find('span#checkpoint_status').html(msg);
+        this.element.find('span#checkpoint_status').text(msg);
     }
 
     SaveWidget.prototype.set_last_checkpoint = function (checkpoint) {

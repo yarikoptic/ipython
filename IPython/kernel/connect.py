@@ -36,9 +36,10 @@ from IPython.external.ssh import tunnel
 # IPython imports
 from IPython.config import Configurable
 from IPython.core.profiledir import ProfileDir
-from IPython.utils.localinterfaces import LOCALHOST
+from IPython.utils.localinterfaces import localhost
 from IPython.utils.path import filefind, get_ipython_dir
-from IPython.utils.py3compat import str_to_bytes, bytes_to_str, cast_bytes_py2
+from IPython.utils.py3compat import (str_to_bytes, bytes_to_str, cast_bytes_py2,
+                                     string_types)
 from IPython.utils.traitlets import (
     Bool, Integer, Unicode, CaselessStrEnum,
 )
@@ -49,7 +50,7 @@ from IPython.utils.traitlets import (
 #-----------------------------------------------------------------------------
 
 def write_connection_file(fname=None, shell_port=0, iopub_port=0, stdin_port=0, hb_port=0,
-                         control_port=0, ip=LOCALHOST, key=b'', transport='tcp',
+                         control_port=0, ip='', key=b'', transport='tcp',
                          signature_scheme='hmac-sha256',
                          ):
     """Generates a JSON config file, including the selection of random ports.
@@ -90,9 +91,12 @@ def write_connection_file(fname=None, shell_port=0, iopub_port=0, stdin_port=0, 
         and 'sha256' is the default hash function.
 
     """
+    if not ip:
+        ip = localhost()
     # default to temporary connector file
     if not fname:
-        fname = tempfile.mktemp('.json')
+        fd, fname = tempfile.mkstemp('.json')
+        os.close(fd)
     
     # Find open ports as necessary.
     
@@ -105,6 +109,8 @@ def write_connection_file(fname=None, shell_port=0, iopub_port=0, stdin_port=0, 
     if transport == 'tcp':
         for i in range(ports_needed):
             sock = socket.socket()
+            # struct.pack('ii', (0,0)) is 8 null bytes
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\0' * 8)
             sock.bind(('', 0))
             ports.append(sock)
         for i, sock in enumerate(ports):
@@ -345,7 +351,7 @@ def tunnel_to_kernel(connection_info, sshserver, sshkey=None):
     (shell, iopub, stdin, hb) : ints
         The four ports on localhost that have been forwarded to the kernel.
     """
-    if isinstance(connection_info, basestring):
+    if isinstance(connection_info, string_types):
         # it's a path, unpack it
         with open(connection_info) as f:
             connection_info = json.loads(f.read())
@@ -391,7 +397,7 @@ class ConnectionFileMixin(Configurable):
 
     transport = CaselessStrEnum(['tcp', 'ipc'], default_value='tcp', config=True)
 
-    ip = Unicode(LOCALHOST, config=True,
+    ip = Unicode(config=True,
         help="""Set the kernel\'s IP address [default localhost].
         If the IP address is something other than localhost, then
         Consoles on other machines will be able to connect
@@ -405,7 +411,7 @@ class ConnectionFileMixin(Configurable):
             else:
                 return 'kernel-ipc'
         else:
-            return LOCALHOST
+            return localhost()
 
     def _ip_changed(self, name, old, new):
         if new == '*':
@@ -467,7 +473,7 @@ class ConnectionFileMixin(Configurable):
 
     def write_connection_file(self):
         """Write connection info to JSON dict in self.connection_file."""
-        if self._connection_file_written:
+        if self._connection_file_written and os.path.exists(self.connection_file):
             return
 
         self.connection_file, cfg = write_connection_file(self.connection_file,
@@ -516,7 +522,7 @@ class ConnectionFileMixin(Configurable):
         """Create a zmq Socket and connect it to the kernel."""
         url = self._make_url(channel)
         socket_type = channel_socket_types[channel]
-        self.log.info("Connecting to: %s" % url)
+        self.log.debug("Connecting to: %s" % url)
         sock = self.context.socket(socket_type)
         if identity:
             sock.identity = identity

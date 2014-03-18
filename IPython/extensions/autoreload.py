@@ -130,20 +130,23 @@ class ModuleReloader(object):
     enabled = False
     """Whether this reloader is enabled"""
 
-    failed = {}
-    """Modules that failed to reload: {module: mtime-on-failed-reload, ...}"""
-
-    modules = {}
-    """Modules specially marked as autoreloadable."""
-
-    skip_modules = {}
-    """Modules specially marked as not autoreloadable."""
-
     check_all = True
     """Autoreload all modules, not just those listed in 'modules'"""
 
-    old_objects = {}
-    """(module-name, name) -> weakref, for replacing old code objects"""
+    def __init__(self):
+        # Modules that failed to reload: {module: mtime-on-failed-reload, ...}
+        self.failed = {}
+        # Modules specially marked as autoreloadable.
+        self.modules = {}
+        # Modules specially marked as not autoreloadable.
+        self.skip_modules = {}
+        # (module-name, name) -> weakref, for replacing old code objects
+        self.old_objects = {}
+        # Module modification timestamps
+        self.modules_mtimes = {}
+
+        # Cache module modification times
+        self.check(check_all=True, do_reload=False)
 
     def mark_module_skipped(self, module_name):
         """Skip reloading the named module in the future"""
@@ -179,16 +182,42 @@ class ModuleReloader(object):
         top_module = sys.modules[top_name]
         return top_module, top_name
 
-    def check(self, check_all=False):
+    def filename_and_mtime(self, module):
+        if not hasattr(module, '__file__'):
+            return None, None
+
+        if module.__name__ == '__main__':
+            # we cannot reload(__main__)
+            return None, None
+
+        filename = module.__file__
+        path, ext = os.path.splitext(filename)
+
+        if ext.lower() == '.py':
+            py_filename = filename
+        else:
+            try:
+                py_filename = openpy.source_from_cache(filename)
+            except ValueError:
+                return None, None
+
+        try:
+            pymtime = os.stat(py_filename).st_mtime
+        except OSError:
+            return None, None
+
+        return py_filename, pymtime
+
+    def check(self, check_all=False, do_reload=True):
         """Check whether some modules need to be reloaded."""
 
         if not self.enabled and not check_all:
             return
 
         if check_all or self.check_all:
-            modules = sys.modules.keys()
+            modules = list(sys.modules.keys())
         else:
-            modules = self.modules.keys()
+            modules = list(self.modules.keys())
 
         for modname in modules:
             m = sys.modules.get(modname, None)
@@ -196,43 +225,32 @@ class ModuleReloader(object):
             if modname in self.skip_modules:
                 continue
 
-            if not hasattr(m, '__file__'):
+            py_filename, pymtime = self.filename_and_mtime(m)
+            if py_filename is None:
                 continue
-
-            if m.__name__ == '__main__':
-                # we cannot reload(__main__)
-                continue
-
-            filename = m.__file__
-            path, ext = os.path.splitext(filename)
-
-            if ext.lower() == '.py':
-                pyc_filename = openpy.cache_from_source(filename)
-                py_filename = filename
-            else:
-                pyc_filename = filename
-                try:
-                    py_filename = openpy.source_from_cache(filename)
-                except ValueError:
-                    continue
 
             try:
-                pymtime = os.stat(py_filename).st_mtime
-                if pymtime <= os.stat(pyc_filename).st_mtime:
+                if pymtime <= self.modules_mtimes[modname]:
                     continue
+            except KeyError:
+                self.modules_mtimes[modname] = pymtime
+                continue
+            else:
                 if self.failed.get(py_filename, None) == pymtime:
                     continue
-            except OSError:
-                continue
 
-            try:
-                superreload(m, reload, self.old_objects)
-                if py_filename in self.failed:
-                    del self.failed[py_filename]
-            except:
-                print("[autoreload of %s failed: %s]" % (
-                        modname, traceback.format_exc(1)), file=sys.stderr)
-                self.failed[py_filename] = pymtime
+            self.modules_mtimes[modname] = pymtime
+
+            # If we've reached this point, we should try to reload the module
+            if do_reload:
+                try:
+                    superreload(m, reload, self.old_objects)
+                    if py_filename in self.failed:
+                        del self.failed[py_filename]
+                except:
+                    print("[autoreload of %s failed: %s]" % (
+                            modname, traceback.format_exc(1)), file=sys.stderr)
+                    self.failed[py_filename] = pymtime
 
 #------------------------------------------------------------------------------
 # superreload
@@ -258,7 +276,7 @@ def update_function(old, new):
 def update_class(old, new):
     """Replace stuff in the __dict__ of a class, and upgrade
     method code objects"""
-    for key in old.__dict__.keys():
+    for key in list(old.__dict__.keys()):
         old_obj = getattr(old, key)
 
         try:
@@ -308,7 +326,7 @@ else:
     UPDATE_RULES.extend([(lambda a, b: isinstance2(a, b, types.ClassType),
                           update_class),
                          (lambda a, b: isinstance2(a, b, types.MethodType),
-                          lambda a, b: update_function(a.im_func, b.im_func)),
+                          lambda a, b: update_function(a.__func__, b.__func__)),
                         ])
 
 
@@ -339,7 +357,7 @@ def superreload(module, reload=reload, old_objects={}):
     """
 
     # collect old objects in the module
-    for name, obj in module.__dict__.items():
+    for name, obj in list(module.__dict__.items()):
         if not hasattr(obj, '__module__') or obj.__module__ != module.__name__:
             continue
         key = (module.__name__, name)
@@ -370,7 +388,7 @@ def superreload(module, reload=reload, old_objects={}):
         raise
 
     # iterate over all objects and update functions & classes
-    for name, new_obj in module.__dict__.items():
+    for name, new_obj in list(module.__dict__.items()):
         key = (module.__name__, name)
         if key not in old_objects: continue
 
@@ -392,7 +410,6 @@ def superreload(module, reload=reload, old_objects={}):
 # IPython connectivity
 #------------------------------------------------------------------------------
 
-from IPython.core.hooks import TryNext
 from IPython.core.magic import Magics, magics_class, line_magic
 
 @magics_class
@@ -401,6 +418,7 @@ class AutoreloadMagics(Magics):
         super(AutoreloadMagics, self).__init__(*a, **kw)
         self._reloader = ModuleReloader()
         self._reloader.check_all = False
+        self.loaded_modules = set(sys.modules)
 
     @line_magic
     def autoreload(self, parameter_s=''):
@@ -473,10 +491,8 @@ class AutoreloadMagics(Magics):
         """
         modname = parameter_s
         if not modname:
-            to_reload = self._reloader.modules.keys()
-            to_reload.sort()
-            to_skip = self._reloader.skip_modules.keys()
-            to_skip.sort()
+            to_reload = sorted(self._reloader.modules.keys())
+            to_skip = sorted(self._reloader.skip_modules.keys())
             if stream is None:
                 stream = sys.stdout
             if self._reloader.check_all:
@@ -493,17 +509,28 @@ class AutoreloadMagics(Magics):
             # Inject module to user namespace
             self.shell.push({top_name: top_module})
 
-    def pre_run_code_hook(self, ip):
-        if not self._reloader.enabled:
-            raise TryNext
-        try:
-            self._reloader.check()
-        except:
-            pass
+    def pre_run_cell(self):
+        if self._reloader.enabled:
+            try:
+                self._reloader.check()
+            except:
+                pass
+
+    def post_execute_hook(self):
+        """Cache the modification times of any modules imported in this execution
+        """
+        newly_loaded_modules = set(sys.modules) - self.loaded_modules
+        for modname in newly_loaded_modules:
+            _, pymtime = self._reloader.filename_and_mtime(sys.modules[modname])
+            if pymtime is not None:
+                self._reloader.modules_mtimes[modname] = pymtime
+
+        self.loaded_modules.update(newly_loaded_modules)
 
 
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
     auto_reload = AutoreloadMagics(ip)
     ip.register_magics(auto_reload)
-    ip.set_hook('pre_run_code_hook', auto_reload.pre_run_code_hook)
+    ip.events.register('pre_run_cell', auto_reload.pre_run_cell)
+    ip.events.register('post_execute', auto_reload.post_execute_hook)

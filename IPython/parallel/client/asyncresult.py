@@ -26,19 +26,11 @@ from zmq import MessageTracker
 from IPython.core.display import clear_output, display, display_pretty
 from IPython.external.decorator import decorator
 from IPython.parallel import error
+from IPython.utils.py3compat import string_types
 
 #-----------------------------------------------------------------------------
 # Functions
 #-----------------------------------------------------------------------------
-
-def _total_seconds(td):
-    """timedelta.total_seconds was added in 2.7"""
-    try:
-        # Python >= 2.7
-        return td.total_seconds()
-    except AttributeError:
-        # Python 2.6
-        return 1e-6 * (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6)
 
 def _raw_text(s):
     display_pretty(s, raw=True)
@@ -70,7 +62,7 @@ class AsyncResult(object):
     _single_result = False
 
     def __init__(self, client, msg_ids, fname='unknown', targets=None, tracker=None):
-        if isinstance(msg_ids, basestring):
+        if isinstance(msg_ids, string_types):
             # always a list
             msg_ids = [msg_ids]
             self._single_result = True
@@ -88,7 +80,7 @@ class AsyncResult(object):
         self._ready = False
         self._outputs_ready = False
         self._success = None
-        self._metadata = [ self._client.metadata.get(id) for id in self.msg_ids ]
+        self._metadata = [self._client.metadata[id] for id in self.msg_ids]
 
     def __repr__(self):
         if self._ready:
@@ -151,7 +143,7 @@ class AsyncResult(object):
         self._ready = self._client.wait(self.msg_ids, timeout)
         if self._ready:
             try:
-                results = map(self._client.results.get, self.msg_ids)
+                results = list(map(self._client.results.get, self.msg_ids))
                 self._result = results
                 if self._single_result:
                     r = results[0]
@@ -263,7 +255,7 @@ class AsyncResult(object):
         elif isinstance(key, slice):
             self._check_ready()
             return error.collect_exceptions(self._result[key], self._fname)
-        elif isinstance(key, basestring):
+        elif isinstance(key, string_types):
             # metadata proxy *does not* require that results are done
             self.wait(0)
             values = [ md[key] for md in self._metadata ]
@@ -338,7 +330,7 @@ class AsyncResult(object):
             # handle single_result AsyncResults, where ar.stamp is single object,
             # not a list
             end = end_key(end)
-        return _total_seconds(end - start)
+        return (end - start).total_seconds()
         
     @property
     def progress(self):
@@ -361,7 +353,7 @@ class AsyncResult(object):
                 stamp = self._client.metadata[msg_id]['submitted']
                 if stamp and stamp < submitted:
                     submitted = stamp
-        return _total_seconds(now-submitted)
+        return (now-submitted).total_seconds()
     
     @property
     @check_ready
@@ -372,7 +364,7 @@ class AsyncResult(object):
         """
         t = 0
         for md in self._metadata:
-            t += _total_seconds(md['completed'] - md['started'])
+            t += (md['completed'] - md['started']).total_seconds()
         return t
     
     @property
@@ -400,7 +392,7 @@ class AsyncResult(object):
         tic = time.time()
         while not self.ready() and (timeout < 0 or time.time() - tic <= timeout):
             self.wait(interval)
-            clear_output()
+            clear_output(wait=True)
             print("%4i/%i tasks finished after %4i s" % (self.progress, N, self.elapsed), end="")
             sys.stdout.flush()
         print()
@@ -677,10 +669,10 @@ class AsyncHubResult(AsyncResult):
         start = time.time()
         if self._ready:
             return
-        local_ids = filter(lambda msg_id: msg_id in self._client.outstanding, self.msg_ids)
+        local_ids = [m for m in self.msg_ids if m in self._client.outstanding]
         local_ready = self._client.wait(local_ids, timeout)
         if local_ready:
-            remote_ids = filter(lambda msg_id: msg_id not in self._client.results, self.msg_ids)
+            remote_ids = [m for m in self.msg_ids if m not in self._client.results]
             if not remote_ids:
                 self._ready = True
             else:
@@ -695,7 +687,7 @@ class AsyncHubResult(AsyncResult):
                     self._ready = True
         if self._ready:
             try:
-                results = map(self._client.results.get, self.msg_ids)
+                results = list(map(self._client.results.get, self.msg_ids))
                 self._result = results
                 if self._single_result:
                     r = results[0]
@@ -710,6 +702,6 @@ class AsyncHubResult(AsyncResult):
             else:
                 self._success = True
             finally:
-                self._metadata = map(self._client.metadata.get, self.msg_ids)
+                self._metadata = [self._client.metadata[mid] for mid in self.msg_ids]
 
 __all__ = ['AsyncResult', 'AsyncMapResult', 'AsyncHubResult']

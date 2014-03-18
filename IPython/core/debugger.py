@@ -35,6 +35,7 @@ from IPython import get_ipython
 from IPython.utils import PyColorize, ulinecache
 from IPython.utils import coloransi, io, py3compat
 from IPython.core.excolors import exception_colors
+from IPython.testing.skipdoctest import skip_doctest
 
 # See if we can use pydb.
 has_pydb = False
@@ -91,22 +92,28 @@ class Tracer(object):
     while functioning acceptably (though with limitations) if outside of it.
     """
 
+    @skip_doctest
     def __init__(self,colors=None):
         """Create a local debugger instance.
 
-        :Parameters:
+        Parameters
+        ----------
 
-          - `colors` (None): a string containing the name of the color scheme to
-        use, it must be one of IPython's valid color schemes.  If not given, the
-        function will default to the current IPython scheme when running inside
-        IPython, and to 'NoColor' otherwise.
+        colors : str, optional
+            The name of the color scheme to use, it must be one of IPython's
+            valid color schemes.  If not given, the function will default to
+            the current IPython scheme when running inside IPython, and to
+            'NoColor' otherwise.
 
-        Usage example:
+        Examples
+        --------
+        ::
 
-        from IPython.core.debugger import Tracer; debug_here = Tracer()
+            from IPython.core.debugger import Tracer; debug_here = Tracer()
 
-        ... later in your code
-        debug_here()  # -> will open up the debugger at that point.
+        Later in your code::
+        
+            debug_here()  # -> will open up the debugger at that point.
 
         Once the debugger activates, you can use all of its regular commands to
         step through code, set breakpoints, etc.  See the pdb documentation
@@ -139,7 +146,10 @@ class Tracer(object):
         # at least raise that limit to 80 chars, which should be enough for
         # most interactive uses.
         try:
-            from repr import aRepr
+            try:
+                from reprlib import aRepr  # Py 3
+            except ImportError:
+                from repr import aRepr  # Py 2
             aRepr.maxstring = 80
         except:
             # This is only a user-facing convenience, so any error we encounter
@@ -324,7 +334,10 @@ class Pdb(OldPdb):
         # vds: <<
 
     def format_stack_entry(self, frame_lineno, lprefix=': ', context = 3):
-        import repr
+        try:
+            import reprlib  # Py 3
+        except ImportError:
+            import repr as reprlib  # Py 2
 
         ret = []
 
@@ -342,7 +355,7 @@ class Pdb(OldPdb):
         if '__return__' in frame.f_locals:
             rv = frame.f_locals['__return__']
             #return_value += '->'
-            return_value += repr.repr(rv) + '\n'
+            return_value += reprlib.repr(rv) + '\n'
         ret.append(return_value)
 
         #s = filename + '(' + `lineno` + ')'
@@ -357,7 +370,7 @@ class Pdb(OldPdb):
         call = ''
         if func != '?':
             if '__args__' in frame.f_locals:
-                args = repr.repr(frame.f_locals['__args__'])
+                args = reprlib.repr(frame.f_locals['__args__'])
             else:
                 args = '()'
             call = tpl_call % (func, args)

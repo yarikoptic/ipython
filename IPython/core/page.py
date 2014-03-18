@@ -208,16 +208,19 @@ def page(strng, start=0, screen_lines=0, pager_cmd=None):
                 # The default WinXP 'type' command is failing on complex strings.
                 retval = 1
             else:
-                tmpname = tempfile.mktemp('.txt')
-                tmpfile = open(tmpname,'wt')
-                tmpfile.write(strng)
-                tmpfile.close()
-                cmd = "%s < %s" % (pager_cmd,tmpname)
-                if os.system(cmd):
-                  retval = 1
-                else:
-                  retval = None
-                os.remove(tmpname)
+                fd, tmpname = tempfile.mkstemp('.txt')
+                try:
+                    os.close(fd)
+                    with open(tmpname, 'wt') as tmpfile:
+                        tmpfile.write(strng)
+                        cmd = "%s < %s" % (pager_cmd, tmpname)
+                    # tmpfile needs to be closed for windows
+                    if os.system(cmd):
+                        retval = 1
+                    else:
+                        retval = None
+                finally:
+                    os.remove(tmpname)
         else:
             try:
                 retval = None
@@ -305,7 +308,7 @@ if os.name == 'nt' and os.environ.get('TERM','dumb') != 'emacs':
         @return:    True if need print more lines, False if quit
         """
         io.stdout.write('---Return to continue, q to quit--- ')
-        ans = msvcrt.getch()
+        ans = msvcrt.getwch()
         if ans in ("q", "Q"):
             result = False
         else:
@@ -314,7 +317,7 @@ if os.name == 'nt' and os.environ.get('TERM','dumb') != 'emacs':
         return result
 else:
     def page_more():
-        ans = raw_input('---Return to continue, q to quit--- ')
+        ans = py3compat.input('---Return to continue, q to quit--- ')
         if ans.lower().startswith('q'):
             return False
         else:
@@ -325,9 +328,11 @@ def snip_print(str,width = 75,print_full = 0,header = ''):
     """Print a string snipping the midsection to fit in width.
 
     print_full: mode control:
+    
       - 0: only snip long strings
       - 1: send to page() directly.
       - 2: snip long strings and ask for full length viewing with page()
+    
     Return 1 if snipping was necessary, 0 otherwise."""
 
     if print_full == 1:
@@ -343,6 +348,6 @@ def snip_print(str,width = 75,print_full = 0,header = ''):
         print(str[:whalf] + ' <...> ' + str[-whalf:])
         snip = 1
     if snip and print_full == 2:
-        if raw_input(header+' Snipped. View (y/n)? [N]').lower() == 'y':
+        if py3compat.input(header+' Snipped. View (y/n)? [N]').lower() == 'y':
             page(str)
     return snip

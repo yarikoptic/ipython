@@ -98,7 +98,7 @@ class LazyEvaluate(object):
         return str(self())
     
     def __unicode__(self):
-        return unicode(self())
+        return py3compat.unicode_type(self())
     
     def __format__(self, format_spec):
         return format(self(), format_spec)
@@ -147,7 +147,10 @@ HOME = os.path.realpath(HOME)
 USER           = py3compat.str_to_unicode(os.environ.get("USER",''))
 HOSTNAME       = py3compat.str_to_unicode(socket.gethostname())
 HOSTNAME_SHORT = HOSTNAME.split(".")[0]
-ROOT_SYMBOL    = "#" if (os.name=='nt' or os.getuid()==0) else "$"
+
+# IronPython doesn't currently have os.getuid() even if 
+# os.name == 'posix'; 2/8/2014
+ROOT_SYMBOL    = "#" if (os.name=='nt' or sys.platform=='cli' or os.getuid()==0) else "$"
 
 prompt_abbreviations = {
     # Prompt/history count
@@ -212,7 +215,7 @@ def cwd_filt(depth):
     $HOME is always replaced with '~'.
     If depth==0, the full path is returned."""
 
-    cwd = os.getcwdu().replace(HOME,"~")
+    cwd = py3compat.getcwd().replace(HOME,"~")
     out = os.sep.join(cwd.split(os.sep)[-depth:])
     return out or os.sep
 
@@ -222,7 +225,7 @@ def cwd_filt2(depth):
     $HOME is always replaced with '~'.
     If depth==0, the full path is returned."""
 
-    full_cwd = os.getcwdu()
+    full_cwd = py3compat.getcwd()
     cwd = full_cwd.replace(HOME,"~").split(os.sep)
     if '~' in cwd and len(cwd) == depth+1:
         depth += 1
@@ -238,9 +241,9 @@ def cwd_filt2(depth):
 #-----------------------------------------------------------------------------
 
 lazily_evaluate = {'time': LazyEvaluate(time.strftime, "%H:%M:%S"),
-                   'cwd': LazyEvaluate(os.getcwdu),
-                   'cwd_last': LazyEvaluate(lambda: os.getcwdu().split(os.sep)[-1]),
-                   'cwd_x': [LazyEvaluate(lambda: os.getcwdu().replace(HOME,"~"))] +\
+                   'cwd': LazyEvaluate(py3compat.getcwd),
+                   'cwd_last': LazyEvaluate(lambda: py3compat.getcwd().split(os.sep)[-1]),
+                   'cwd_x': [LazyEvaluate(lambda: py3compat.getcwd().replace(HOME,"~"))] +\
                             [LazyEvaluate(cwd_filt, x) for x in range(1,6)],
                    'cwd_y': [LazyEvaluate(cwd_filt2, x) for x in range(6)]
                    }

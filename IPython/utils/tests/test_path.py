@@ -14,10 +14,12 @@
 
 from __future__ import with_statement
 
+import errno
 import os
 import shutil
 import sys
 import tempfile
+import warnings
 from contextlib import contextmanager
 
 from os.path import join, abspath, split
@@ -37,15 +39,21 @@ from IPython.utils.tempdir import TemporaryDirectory
 
 # Platform-dependent imports
 try:
-    import _winreg as wreg
+    import winreg as wreg  # Py 3
 except ImportError:
-    #Fake _winreg module on none windows platforms
-    import types
-    wr_name = "winreg" if py3compat.PY3 else "_winreg"
-    sys.modules[wr_name] = types.ModuleType(wr_name)
-    import _winreg as wreg
-    #Add entries that needs to be stubbed by the testing code
-    (wreg.OpenKey, wreg.QueryValueEx,) = (None, None)
+    try:
+        import _winreg as wreg  # Py 2
+    except ImportError:
+        #Fake _winreg module on none windows platforms
+        import types
+        wr_name = "winreg" if py3compat.PY3 else "_winreg"
+        sys.modules[wr_name] = types.ModuleType(wr_name)
+        try:
+            import winreg as wreg
+        except ImportError:
+            import _winreg as wreg
+        #Add entries that needs to be stubbed by the testing code
+        (wreg.OpenKey, wreg.QueryValueEx,) = (None, None)
 
 try:
     reload
@@ -110,7 +118,7 @@ def teardown_environment():
     os.chdir(old_wd)
     reload(path)
 
-    for key in env.keys():
+    for key in list(env):
         if key not in oldenv:
             del env[key]
     env.update(oldenv)
@@ -121,6 +129,15 @@ def teardown_environment():
 
 # Build decorator that uses the setup_environment/setup_environment
 with_environment = with_setup(setup_environment, teardown_environment)
+
+@contextmanager
+def patch_get_home_dir(dirpath):
+    orig_get_home_dir = path.get_home_dir
+    path.get_home_dir = lambda : dirpath
+    try:
+        yield
+    finally:
+        path.get_home_dir = orig_get_home_dir
 
 @skip_if_not_win32
 @with_environment
@@ -219,74 +236,96 @@ def test_get_ipython_dir_1():
 @with_environment
 def test_get_ipython_dir_2():
     """test_get_ipython_dir_2, Testcase to see if we can call get_ipython_dir without Exceptions."""
-    path.get_home_dir = lambda : "someplace"
-    path.get_xdg_dir = lambda : None
-    path._writable_dir = lambda path: True
-    os.name = "posix"
-    env.pop('IPYTHON_DIR', None)
-    env.pop('IPYTHONDIR', None)
-    env.pop('XDG_CONFIG_HOME', None)
-    ipdir = path.get_ipython_dir()
-    nt.assert_equal(ipdir, os.path.join("someplace", ".ipython"))
+    with patch_get_home_dir('someplace'):
+        path.get_xdg_dir = lambda : None
+        path._writable_dir = lambda path: True
+        os.name = "posix"
+        env.pop('IPYTHON_DIR', None)
+        env.pop('IPYTHONDIR', None)
+        env.pop('XDG_CONFIG_HOME', None)
+        ipdir = path.get_ipython_dir()
+        nt.assert_equal(ipdir, os.path.join("someplace", ".ipython"))
 
 @with_environment
 def test_get_ipython_dir_3():
-    """test_get_ipython_dir_3, use XDG if defined, and .ipython doesn't exist."""
-    path.get_home_dir = lambda : "someplace"
-    path._writable_dir = lambda path: True
-    os.name = "posix"
-    env.pop('IPYTHON_DIR', None)
-    env.pop('IPYTHONDIR', None)
-    env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
-    ipdir = path.get_ipython_dir()
-    if sys.platform == "darwin":
-        expected = os.path.join("someplace", ".ipython")
-    else:
-        expected = os.path.join(XDG_TEST_DIR, "ipython")
-    nt.assert_equal(ipdir, expected)
+    """test_get_ipython_dir_3, move XDG if defined, and .ipython doesn't exist."""
+    tmphome = TemporaryDirectory()
+    try:
+        with patch_get_home_dir(tmphome.name):
+            os.name = "posix"
+            env.pop('IPYTHON_DIR', None)
+            env.pop('IPYTHONDIR', None)
+            env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
+
+            with warnings.catch_warnings(record=True) as w:
+                ipdir = path.get_ipython_dir()
+
+            nt.assert_equal(ipdir, os.path.join(tmphome.name, ".ipython"))
+            if sys.platform != 'darwin':
+                nt.assert_equal(len(w), 1)
+                nt.assert_in('Moving', str(w[0]))
+    finally:
+        tmphome.cleanup()
 
 @with_environment
 def test_get_ipython_dir_4():
-    """test_get_ipython_dir_4, use XDG if both exist."""
-    path.get_home_dir = lambda : HOME_TEST_DIR
-    os.name = "posix"
-    env.pop('IPYTHON_DIR', None)
-    env.pop('IPYTHONDIR', None)
-    env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
-    ipdir = path.get_ipython_dir()
-    if sys.platform == "darwin":
-        expected = os.path.join(HOME_TEST_DIR, ".ipython")
-    else:
-        expected = os.path.join(XDG_TEST_DIR, "ipython")
-    nt.assert_equal(ipdir, expected)
+    """test_get_ipython_dir_4, warn if XDG and home both exist."""
+    with patch_get_home_dir(HOME_TEST_DIR):
+        os.name = "posix"
+        env.pop('IPYTHON_DIR', None)
+        env.pop('IPYTHONDIR', None)
+        env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
+        try:
+            os.mkdir(os.path.join(XDG_TEST_DIR, 'ipython'))
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
+
+        with warnings.catch_warnings(record=True) as w:
+            ipdir = path.get_ipython_dir()
+
+        nt.assert_equal(ipdir, os.path.join(HOME_TEST_DIR, ".ipython"))
+        if sys.platform != 'darwin':
+            nt.assert_equal(len(w), 1)
+            nt.assert_in('Ignoring', str(w[0]))
 
 @with_environment
 def test_get_ipython_dir_5():
     """test_get_ipython_dir_5, use .ipython if exists and XDG defined, but doesn't exist."""
-    path.get_home_dir = lambda : HOME_TEST_DIR
-    os.name = "posix"
-    env.pop('IPYTHON_DIR', None)
-    env.pop('IPYTHONDIR', None)
-    env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
-    os.rmdir(os.path.join(XDG_TEST_DIR, 'ipython'))
-    ipdir = path.get_ipython_dir()
-    nt.assert_equal(ipdir, IP_TEST_DIR)
+    with patch_get_home_dir(HOME_TEST_DIR):
+        os.name = "posix"
+        env.pop('IPYTHON_DIR', None)
+        env.pop('IPYTHONDIR', None)
+        env['XDG_CONFIG_HOME'] = XDG_TEST_DIR
+        try:
+            os.rmdir(os.path.join(XDG_TEST_DIR, 'ipython'))
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
+        ipdir = path.get_ipython_dir()
+        nt.assert_equal(ipdir, IP_TEST_DIR)
 
 @with_environment
 def test_get_ipython_dir_6():
-    """test_get_ipython_dir_6, use XDG if defined and neither exist."""
+    """test_get_ipython_dir_6, use home over XDG if defined and neither exist."""
     xdg = os.path.join(HOME_TEST_DIR, 'somexdg')
     os.mkdir(xdg)
     shutil.rmtree(os.path.join(HOME_TEST_DIR, '.ipython'))
-    path.get_home_dir = lambda : HOME_TEST_DIR
-    path.get_xdg_dir = lambda : xdg
-    os.name = "posix"
-    env.pop('IPYTHON_DIR', None)
-    env.pop('IPYTHONDIR', None)
-    env.pop('XDG_CONFIG_HOME', None)
-    xdg_ipdir = os.path.join(xdg, "ipython")
-    ipdir = path.get_ipython_dir()
-    nt.assert_equal(ipdir, xdg_ipdir)
+    with patch_get_home_dir(HOME_TEST_DIR):
+        orig_get_xdg_dir = path.get_xdg_dir
+        path.get_xdg_dir = lambda : xdg
+        try:
+            os.name = "posix"
+            env.pop('IPYTHON_DIR', None)
+            env.pop('IPYTHONDIR', None)
+            env.pop('XDG_CONFIG_HOME', None)
+            with warnings.catch_warnings(record=True) as w:
+                ipdir = path.get_ipython_dir()
+
+            nt.assert_equal(ipdir, os.path.join(HOME_TEST_DIR, '.ipython'))
+            nt.assert_equal(len(w), 0)
+        finally:
+            path.get_xdg_dir = orig_get_xdg_dir
 
 @with_environment
 def test_get_ipython_dir_7():
@@ -414,8 +453,9 @@ def test_get_ipython_module_path():
 def test_get_long_path_name_win32():
     with TemporaryDirectory() as tmpdir:
 
-        # Make a long path.
-        long_path = os.path.join(tmpdir, u'this is my long path name')
+        # Make a long path. Expands the path of tmpdir prematurely as it may already have a long 
+        # path component, so ensure we include the long form of it
+        long_path = os.path.join(path.get_long_path_name(tmpdir), u'this is my long path name')
         os.makedirs(long_path)
 
         # Test to see if the short path evaluates correctly.
@@ -499,8 +539,8 @@ class TestShellGlob(object):
 
     @classmethod
     def setUpClass(cls):
-        cls.filenames_start_with_a = map('a{0}'.format, range(3))
-        cls.filenames_end_with_b = map('{0}b'.format, range(3))
+        cls.filenames_start_with_a = ['a0', 'a1', 'a2']
+        cls.filenames_end_with_b = ['0b', '1b', '2b']
         cls.filenames = cls.filenames_start_with_a + cls.filenames_end_with_b
         cls.tempdir = TemporaryDirectory()
         td = cls.tempdir.name
@@ -517,7 +557,7 @@ class TestShellGlob(object):
     @classmethod
     @contextmanager
     def in_tempdir(cls):
-        save = os.getcwdu()
+        save = py3compat.getcwd()
         try:
             os.chdir(cls.tempdir.name)
             yield

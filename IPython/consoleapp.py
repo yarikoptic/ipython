@@ -45,6 +45,7 @@ from IPython.kernel.zmq.kernelapp import (
     kernel_aliases,
     IPKernelApp
 )
+from IPython.kernel.zmq.pylab.config import InlineBackend
 from IPython.kernel.zmq.session import Session, default_secure
 from IPython.kernel.zmq.zmqshell import ZMQInteractiveShell
 from IPython.kernel.connect import ConnectionFileMixin
@@ -53,7 +54,7 @@ from IPython.kernel.connect import ConnectionFileMixin
 # Network Constants
 #-----------------------------------------------------------------------------
 
-from IPython.utils.localinterfaces import LOCALHOST
+from IPython.utils.localinterfaces import localhost
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -110,14 +111,7 @@ aliases.update(app_aliases)
 # IPythonConsole
 #-----------------------------------------------------------------------------
 
-classes = [IPKernelApp, ZMQInteractiveShell, KernelManager, ProfileDir, Session]
-
-try:
-    from IPython.kernel.zmq.pylab.backend_inline import InlineBackend
-except ImportError:
-    pass
-else:
-    classes.append(InlineBackend)
+classes = [IPKernelApp, ZMQInteractiveShell, KernelManager, ProfileDir, Session, InlineBackend]
 
 class IPythonConsoleApp(ConnectionFileMixin):
     name = 'ipython-console-mixin'
@@ -216,7 +210,7 @@ class IPythonConsoleApp(ConnectionFileMixin):
             except Exception:
                 self.log.critical("Could not find existing kernel connection file %s", self.existing)
                 self.exit(1)
-            self.log.info("Connecting to existing kernel: %s" % cf)
+            self.log.debug("Connecting to existing kernel: %s" % cf)
             self.connection_file = cf
         else:
             # not existing, check if we are going to write the file
@@ -254,7 +248,7 @@ class IPythonConsoleApp(ConnectionFileMixin):
         with open(fname) as f:
             cfg = json.load(f)
         self.transport = cfg.get('transport', 'tcp')
-        self.ip = cfg.get('ip', LOCALHOST)
+        self.ip = cfg.get('ip', localhost())
         
         for channel in ('hb', 'shell', 'iopub', 'stdin', 'control'):
             name = channel + '_port'
@@ -282,7 +276,7 @@ class IPythonConsoleApp(ConnectionFileMixin):
         if self.sshkey and not self.sshserver:
             # specifying just the key implies that we are connecting directly
             self.sshserver = ip
-            ip = LOCALHOST
+            ip = localhost()
         
         # build connection dict for tunnels:
         info = dict(ip=ip,
@@ -295,7 +289,7 @@ class IPythonConsoleApp(ConnectionFileMixin):
         self.log.info("Forwarding connections to %s via %s"%(ip, self.sshserver))
         
         # tunnels return a new set of ports, which will be on localhost:
-        self.ip = LOCALHOST
+        self.ip = localhost()
         try:
             newports = tunnel_to_kernel(info, self.sshserver, self.sshkey)
         except:
@@ -309,8 +303,8 @@ class IPythonConsoleApp(ConnectionFileMixin):
         base,ext = os.path.splitext(cf)
         base = os.path.basename(base)
         self.connection_file = os.path.basename(base)+'-ssh'+ext
-        self.log.critical("To connect another client via this tunnel, use:")
-        self.log.critical("--existing %s" % self.connection_file)
+        self.log.info("To connect another client via this tunnel, use:")
+        self.log.info("--existing %s" % self.connection_file)
     
     def _new_connection_file(self):
         cf = ''

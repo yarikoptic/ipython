@@ -19,14 +19,15 @@ default: html
 
 help:
 	@echo "Please use \`make <target>' where <target> is one of"
-	@echo "  html      to make standalone HTML files"
-	@echo "  pickle    to make pickle files (usable by e.g. sphinx-web)"
-	@echo "  htmlhelp  to make HTML files and a HTML help project"
-	@echo "  latex     to make LaTeX files, you can set PAPER=a4 or PAPER=letter"
-	@echo "  texinfo   to make Texinfo files"
-	@echo "  info      to make Texinfo files and run them through makeinfo"
-	@echo "  changes   to make an overview over all changed/added/deprecated items"
-	@echo "  linkcheck to check all external links for integrity"
+	@echo "  html        standalone HTML files"
+	@echo "  html_noapi  same as above, without the time consuming API docs"
+	@echo "  pickle      pickle files (usable by e.g. sphinx-web)"
+	@echo "  htmlhelp    HTML files and a HTML help project"
+	@echo "  latex       LaTeX files, you can set PAPER=a4 or PAPER=letter"
+	@echo "  texinfo     Texinfo files"
+	@echo "  info        Texinfo files and run them through makeinfo"
+	@echo "  changes     an overview over all changed/added/deprecated items"
+	@echo "  linkcheck   check all external links for integrity (takes a long time)"
 	@echo
 	@echo "Compound utility targets:"
 	@echo "pdf          latex and then runs the PDF generation"
@@ -34,8 +35,12 @@ help:
 	@echo "dist         all, and then puts the results in dist/"
 	@echo "gitwash-update update git workflow from source repo"
 
-clean:
-	-rm -rf build/* dist/* $(SRCDIR)/api/generated
+clean_api:
+	-rm -rf $(SRCDIR)/api/generated
+
+clean: clean_api
+	-rm -rf build/* dist/*
+	-rm -rf $(SRCDIR)/config/options/generated
 
 pdf: latex
 	cd build/latex && make all-pdf
@@ -52,11 +57,20 @@ dist: html
 	cp -al build/html .
 	@echo "Build finished.  Final docs are in html/"
 
-html: api
+html: api autoconfig
+html_noapi: clean_api autoconfig
+
+html html_noapi:
 	mkdir -p build/html build/doctrees
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) build/html
 	@echo
 	@echo "Build finished. The HTML pages are in build/html."
+
+autoconfig: source/config/options/generated
+
+source/config/options/generated:
+	python autogen_config.py
+	@echo "Created docs for config options"
 
 api: source/api/generated/gen.txt
 
@@ -91,7 +105,7 @@ qthelp:
 	@echo "To view the help file:"
 	@echo "# assistant -collectionFile $(BUILDDIR)/qthelp/IPython.qhc"
 
-latex: api
+latex: api autoconfig
 	mkdir -p build/latex build/doctrees
 	$(SPHINXBUILD) -b latex $(ALLSPHINXOPTS) build/latex
 	@echo
@@ -119,7 +133,10 @@ nightly: dist
 	rsync -avH --delete dist/ ipython:www/doc/nightly
 
 gh-pages: clean html
-	python gh-pages.py
+	# if VERSION is unspecified, it will be dev
+	# For releases, VERSION should be just the major version,
+	# e.g. VERSION=2 make gh-pages
+	python gh-pages.py $(VERSION)
 
 texinfo:
 	mkdir -p $(BUILDDIR)/texinfo

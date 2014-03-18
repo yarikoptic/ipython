@@ -26,12 +26,10 @@ import sys
 
 # This check is also made in IPython/__init__, don't forget to update both when
 # changing Python version requirements.
-#~ if sys.version[0:3] < '2.6':
-    #~ error = """\
-#~ ERROR: 'IPython requires Python Version 2.6 or above.'
-#~ Exiting."""
-    #~ print >> sys.stderr, error
-    #~ sys.exit(1)
+if sys.version_info[:2] < (2,7):
+    error = "ERROR: IPython requires Python Version 2.7 or above."
+    print(error, file=sys.stderr)
+    sys.exit(1)
 
 PY3 = (sys.version_info[0] >= 3)
 
@@ -53,10 +51,6 @@ if os.path.exists('MANIFEST'): os.remove('MANIFEST')
 
 from distutils.core import setup
 
-# On Python 3, we need distribute (new setuptools) to do the 2to3 conversion
-if PY3:
-    import setuptools
-
 # Our own imports
 from setupbase import target_update
 
@@ -64,7 +58,9 @@ from setupbase import (
     setup_args,
     find_packages,
     find_package_data,
-    find_scripts,
+    check_package_data_first,
+    find_entry_points,
+    build_scripts_entrypt,
     find_data_files,
     check_for_dependencies,
     git_prebuild,
@@ -72,6 +68,13 @@ from setupbase import (
     update_submodules,
     require_submodules,
     UpdateSubmodules,
+    get_bdist_wheel,
+    CompileCSS,
+    JavascriptVersion,
+    install_symlinked,
+    install_lib_symlink,
+    install_scripts_for_symlink,
+    unsymlink,
 )
 from setupext import setupext
 
@@ -152,7 +155,6 @@ require_clean_submodules()
 
 # update the manuals when building a source dist
 if len(sys.argv) >= 2 and sys.argv[1] in ('sdist','bdist_rpm'):
-    import textwrap
 
     # List of things to be updated. Each entry is a triplet of args for
     # target_update()
@@ -175,21 +177,10 @@ if len(sys.argv) >= 2 and sys.argv[1] in ('sdist','bdist_rpm'):
                   ['docs/man/ipengine.1'],
                   'cd docs/man && gzip -9c ipengine.1 > ipengine.1.gz'),
 
-                 ('docs/man/iplogger.1.gz',
-                  ['docs/man/iplogger.1'],
-                  'cd docs/man && gzip -9c iplogger.1 > iplogger.1.gz'),
-
                  ('docs/man/ipython.1.gz',
                   ['docs/man/ipython.1'],
                   'cd docs/man && gzip -9c ipython.1 > ipython.1.gz'),
 
-                 ('docs/man/irunner.1.gz',
-                  ['docs/man/irunner.1'],
-                  'cd docs/man && gzip -9c irunner.1 > irunner.1.gz'),
-
-                 ('docs/man/pycolor.1.gz',
-                  ['docs/man/pycolor.1'],
-                  'cd docs/man && gzip -9c pycolor.1 > pycolor.1.gz'),
                  ]
 
 
@@ -201,6 +192,7 @@ if len(sys.argv) >= 2 and sys.argv[1] in ('sdist','bdist_rpm'):
 
 packages = find_packages()
 package_data = find_package_data()
+
 data_files = find_data_files()
 
 setup_args['packages'] = packages
@@ -234,10 +226,16 @@ class UploadWindowsInstallers(upload):
             self.upload_file('bdist_wininst', 'any', dist_file)
 
 setup_args['cmdclass'] = {
-    'build_py': git_prebuild('IPython'),
+    'build_py': check_package_data_first(git_prebuild('IPython')),
     'sdist' : git_prebuild('IPython', sdist),
     'upload_wininst' : UploadWindowsInstallers,
     'submodule' : UpdateSubmodules,
+    'css' : CompileCSS,
+    'symlink': install_symlinked,
+    'install_lib_symlink': install_lib_symlink,
+    'install_scripts_sym': install_scripts_for_symlink,
+    'unsymlink': unsymlink,
+    'jsversion' : JavascriptVersion,
 }
 
 #---------------------------------------------------------------------------
@@ -247,8 +245,8 @@ setup_args['cmdclass'] = {
 # For some commands, use setuptools.  Note that we do NOT list install here!
 # If you want a setuptools-enhanced install, just run 'setupegg.py install'
 needs_setuptools = set(('develop', 'release', 'bdist_egg', 'bdist_rpm',
-           'bdist', 'bdist_dumb', 'bdist_wininst', 'install_egg_info',
-           'egg_info', 'easy_install', 'upload',
+           'bdist', 'bdist_dumb', 'bdist_wininst', 'bdist_wheel',
+           'egg_info', 'easy_install', 'upload', 'install_egg_info',
             ))
 if sys.platform == 'win32':
     # Depend on setuptools for install on *Windows only*
@@ -264,43 +262,43 @@ if len(needs_setuptools.intersection(sys.argv)) > 0:
 # specific to setup
 setuptools_extra_args = {}
 
+# setuptools requirements
+
+extras_require = dict(
+    parallel = ['pyzmq>=2.1.11'],
+    qtconsole = ['pyzmq>=2.1.11', 'pygments'],
+    zmq = ['pyzmq>=2.1.11'],
+    doc = ['Sphinx>=1.1', 'numpydoc'],
+    test = ['nose>=0.10.1'],
+    notebook = ['tornado>=3.1', 'pyzmq>=2.1.11', 'jinja2'],
+    nbconvert = ['pygments', 'jinja2', 'Sphinx>=0.3']
+)
+if sys.version_info < (3, 3):
+    extras_require['test'].append('mock')
+
+everything = set()
+for deps in extras_require.values():
+    everything.update(deps)
+extras_require['all'] = everything
+
+install_requires = []
+if sys.platform == 'darwin':
+    if any(arg.startswith('bdist') for arg in sys.argv) or not setupext.check_for_readline():
+        install_requires.append('gnureadline')
+elif sys.platform.startswith('win'):
+    # Pyreadline has unicode and Python 3 fixes in 2.0
+    install_requires.append('pyreadline>=2.0')
+
 if 'setuptools' in sys.modules:
     # setup.py develop should check for submodules
     from setuptools.command.develop import develop
     setup_args['cmdclass']['develop'] = require_submodules(develop)
+    setup_args['cmdclass']['bdist_wheel'] = get_bdist_wheel()
     
     setuptools_extra_args['zip_safe'] = False
-    setuptools_extra_args['entry_points'] = find_scripts(True)
-    setup_args['extras_require'] = dict(
-        parallel = 'pyzmq>=2.1.11',
-        qtconsole = ['pyzmq>=2.1.11', 'pygments'],
-        zmq = 'pyzmq>=2.1.11',
-        doc = 'Sphinx>=0.3',
-        test = 'nose>=0.10.1',
-        notebook = ['tornado>=2.0', 'pyzmq>=2.1.11', 'jinja2'],
-        nbconvert = ['pygments', 'jinja2', 'Sphinx>=0.3']
-    )
-    everything = set()
-    for deps in setup_args['extras_require'].values():
-        if not isinstance(deps, list):
-            deps = [deps]
-        for dep in deps:
-            everything.add(dep)
-    setup_args['extras_require']['all'] = everything
-    
-    requires = setup_args.setdefault('install_requires', [])
-    setupext.display_status = False
-    if not setupext.check_for_readline():
-        if sys.platform == 'darwin':
-            requires.append('readline')
-        elif sys.platform.startswith('win'):
-            # Pyreadline 64 bit windows issue solved in versions >=1.7.1
-            # Also solves issues with some older versions of pyreadline that
-            # satisfy the unconstrained depdendency.
-            requires.append('pyreadline>=1.7.1')
-        else:
-            pass
-            # do we want to install readline here?
+    setuptools_extra_args['entry_points'] = {'console_scripts':find_entry_points()}
+    setup_args['extras_require'] = extras_require
+    requires = setup_args['install_requires'] = install_requires
 
     # Script to be run by the windows binary installer after the default setup
     # routine, to add shortcuts and similar windows-only things.  Windows
@@ -318,29 +316,18 @@ if 'setuptools' in sys.modules:
                                  {"install_script":
                                   "ipython_win_post_install.py"}}
 
-    if PY3:
-        setuptools_extra_args['use_2to3'] = True
-        # we try to make a 2.6, 2.7, and 3.1 to 3.3 python compatible code
-        # so we explicitly disable some 2to3 fixes to be sure we aren't forgetting
-        # anything.
-        setuptools_extra_args['use_2to3_exclude_fixers'] = [
-                'lib2to3.fixes.fix_apply',
-                'lib2to3.fixes.fix_except',
-                'lib2to3.fixes.fix_has_key',
-                'lib2to3.fixes.fix_next',
-                'lib2to3.fixes.fix_repr',
-                'lib2to3.fixes.fix_tuple_params',
-                ]
-        from setuptools.command.build_py import build_py
-        setup_args['cmdclass'] = {'build_py': git_prebuild('IPython', build_cmd=build_py)}
-        setuptools_extra_args['entry_points'] = find_scripts(True, suffix='3')
-        setuptools._dont_write_bytecode = True
 else:
-    # If we are running without setuptools, call this function which will
+    # If we are installing without setuptools, call this function which will
     # check for dependencies an inform the user what is needed.  This is
     # just to make life easy for users.
-    check_for_dependencies()
-    setup_args['scripts'] = find_scripts(False)
+    for install_cmd in ('install', 'symlink'):
+        if install_cmd in sys.argv:
+            check_for_dependencies()
+            break
+    # scripts has to be a non-empty list, or install_scripts isn't called
+    setup_args['scripts'] = [e.split('=')[0].strip() for e in find_entry_points()]
+
+    setup_args['cmdclass']['build_scripts'] = build_scripts_entrypt
 
 #---------------------------------------------------------------------------
 # Do the actual setup now

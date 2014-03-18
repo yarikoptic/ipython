@@ -12,7 +12,7 @@ information, check the :ref:`tips page <tips>`, or look at examples in the
 
 If you've never used Python before, you might want to look at `the official
 tutorial <http://docs.python.org/tutorial/>`_ or an alternative, `Dive into
-Python <http://diveintopython.org/toc/index.html>`_.
+Python <http://diveintopython.net/toc/index.html>`_.
 
 The four most helpful commands 
 ===============================
@@ -178,11 +178,10 @@ visited directories and allows you to go to any previously visited one.
 Configuration
 =============
 
-Much of IPython can be tweaked through :ref:`configuration <config_overview>`.
+Much of IPython can be tweaked through :doc:`configuration </config/intro>`.
 To get started, use the command ``ipython profile create`` to produce the
 default config files. These will be placed in
-:file:`~/.ipython/profile_default` or
-:file:`~/.config/ipython/profile_default`, and contain comments explaining
+:file:`~/.ipython/profile_default`, and contain comments explaining
 what the various options do.
 
 Profiles allow you to use IPython for different tasks, keeping separate config

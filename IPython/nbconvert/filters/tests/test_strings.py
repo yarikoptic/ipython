@@ -15,10 +15,10 @@ Module with tests for Strings
 #-----------------------------------------------------------------------------
 import os
 
-from IPython.testing import decorators as dec
 from ...tests.base import TestsBase
 from ..strings import (wrap_text, html2text, add_anchor, strip_dollars, 
     strip_files_prefix, get_lines, comment_lines, ipython2python, posix_path,
+    add_prompts
 )
 
 
@@ -36,7 +36,7 @@ class TestStrings(TestsBase):
         As if the strings were thine, shouldst know of this.
         """
         for length in [30,5,1]:
-            yield self._confirm_wrap_text(test_text, length)
+            self._confirm_wrap_text(test_text, length)
     
 
     def _confirm_wrap_text(self, text, length):
@@ -60,7 +60,12 @@ class TestStrings(TestsBase):
         assert '<b' in results
         assert '</b>' in results
 
-        
+    def test_add_anchor_fail(self):
+        """add_anchor does nothing when it fails"""
+        html = '<h1>Hello <br>World!</h1>'
+        results = add_anchor(html)
+        self.assertEqual(html, results)
+
     def test_strip_dollars(self):
         """strip_dollars test"""
         tests = [
@@ -73,7 +78,7 @@ class TestStrings(TestsBase):
             ('Hello', 'Hello'),
             ('W$o$rld', 'W$o$rld')]
         for test in tests:
-            yield self._try_strip_dollars(test[0], test[1])
+            self._try_strip_dollars(test[0], test[1])
 
 
     def _try_strip_dollars(self, test, result):
@@ -87,9 +92,22 @@ class TestStrings(TestsBase):
             ('/files', '/files'), 
             ('test="/files"', 'test="/files"'), 
             ('My files are in `files/`', 'My files are in `files/`'),
-            ('<a href="files/test.html">files/test.html</a>', '<a href="test.html">files/test.html</a>')]
+            ('<a href="files/test.html">files/test.html</a>', '<a href="test.html">files/test.html</a>'),
+            ('<a href="/files/test.html">files/test.html</a>', '<a href="test.html">files/test.html</a>'),
+            ("<a href='files/test.html'>files/test.html</a>", "<a href='test.html'>files/test.html</a>"),
+            ('<img src="files/url/location.gif">', '<img src="url/location.gif">'),
+            ('<img src="/files/url/location.gif">', '<img src="url/location.gif">'),
+            ('hello![caption]', 'hello![caption]'),
+            ('hello![caption](/url/location.gif)', 'hello![caption](/url/location.gif)'),
+            ('hello![caption](url/location.gif)', 'hello![caption](url/location.gif)'),
+            ('hello![caption](url/location.gif)', 'hello![caption](url/location.gif)'),
+            ('hello![caption](files/url/location.gif)', 'hello![caption](url/location.gif)'),
+            ('hello![caption](/files/url/location.gif)', 'hello![caption](url/location.gif)'),
+            ('hello [text](/files/url/location.gif)', 'hello [text](url/location.gif)'),
+            ('hello [text space](files/url/location.gif)', 'hello [text space](url/location.gif)'),
+        ]
         for test in tests:
-            yield self._try_files_prefix(test[0], test[1])
+            self._try_files_prefix(test[0], test[1])
 
 
     def _try_files_prefix(self, test, result):
@@ -121,8 +139,15 @@ class TestStrings(TestsBase):
             ignore_spaces=True, ignore_newlines=True)
     
     def test_posix_path(self):
+        """posix_path test"""
         path_list = ['foo', 'bar']
         expected = '/'.join(path_list)
         native = os.path.join(*path_list)
         filtered = posix_path(native)
         self.assertEqual(filtered, expected)
+    
+    def test_add_prompts(self):
+        """add_prompts test"""
+        text1 = """for i in range(10):\n  i += 1\n  print i"""
+        text2 = """>>> for i in range(10):\n...   i += 1\n...   print i"""
+        self.assertEqual(text2, add_prompts(text1))

@@ -1,6 +1,5 @@
-"""
-Exporter for exporting notebooks to restructured text.
-"""
+"""restructuredText Exporter class"""
+
 #-----------------------------------------------------------------------------
 # Copyright (c) 2013, the IPython Development Team.
 #
@@ -13,26 +12,29 @@ Exporter for exporting notebooks to restructured text.
 # Imports
 #-----------------------------------------------------------------------------
 
-from IPython.utils.traitlets import Unicode
 from IPython.config import Config
 
-from .exporter import Exporter
+from .templateexporter import TemplateExporter
 
 #-----------------------------------------------------------------------------
 # Classes
 #-----------------------------------------------------------------------------
 
-class RSTExporter(Exporter):
+class RSTExporter(TemplateExporter):
     """
     Exports restructured text documents.
     """
     
-    file_extension = Unicode(
-        'rst', config=True, 
-        help="Extension of the file that should be written to disk")
+    def _file_extension_default(self):
+        return 'rst'
+
+    def _template_file_default(self):
+        return 'rst'
+
+    output_mimetype = 'text/restructuredtext'
 
     @property
     def default_config(self):
-        c = Config({'ExtractOutputTransformer':{'enabled':True}})
+        c = Config({'ExtractOutputPreprocessor':{'enabled':True}})
         c.merge(super(RSTExporter,self).default_config)
         return c

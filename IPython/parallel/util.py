@@ -1,4 +1,4 @@
-"""some generic utilities for dealing with classes, urls, and serialization
+"""Some generic utilities for dealing with classes, urls, and serialization.
 
 Authors:
 
@@ -27,6 +27,7 @@ try:
     from signal import SIGKILL
 except ImportError:
     SIGKILL=None
+from types import FunctionType
 
 try:
     import cPickle
@@ -43,7 +44,8 @@ from IPython.external.decorator import decorator
 
 # IPython imports
 from IPython.config.application import Application
-from IPython.utils.localinterfaces import LOCALHOST, PUBLIC_IPS
+from IPython.utils.localinterfaces import localhost, is_public_ip, public_ips
+from IPython.utils.py3compat import string_types, iteritems, itervalues
 from IPython.kernel.zmq.log import EnginePUBHandler
 from IPython.kernel.zmq.serialize import (
     unserialize_object, serialize_object, pack_apply_message, unpack_apply_message
@@ -58,7 +60,7 @@ class Namespace(dict):
     
     def __getattr__(self, key):
         """getattr aliased to getitem"""
-        if key in self.iterkeys():
+        if key in self:
             return self[key]
         else:
             raise NameError(key)
@@ -76,7 +78,7 @@ class ReverseDict(dict):
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
         self._reverse = dict()
-        for key, value in self.iteritems():
+        for key, value in iteritems(self):
             self._reverse[value] = key
     
     def __getitem__(self, key):
@@ -130,7 +132,7 @@ def is_url(url):
 
 def validate_url(url):
     """validate a url for zeromq"""
-    if not isinstance(url, basestring):
+    if not isinstance(url, string_types):
         raise TypeError("url must be a string, not %r"%type(url))
     url = url.lower()
     
@@ -163,11 +165,11 @@ def validate_url(url):
 
 def validate_url_container(container):
     """validate a potentially nested collection of urls."""
-    if isinstance(container, basestring):
+    if isinstance(container, string_types):
         url = container
         return validate_url(url)
     elif isinstance(container, dict):
-        container = container.itervalues()
+        container = itervalues(container)
     
     for element in container:
         validate_url_container(element)
@@ -187,9 +189,9 @@ def disambiguate_ip_address(ip, location=None):
     """turn multi-ip interfaces '0.0.0.0' and '*' into connectable
     ones, based on the location (default interpretation of location is localhost)."""
     if ip in ('0.0.0.0', '*'):
-        if location is None or location in PUBLIC_IPS or not PUBLIC_IPS:
+        if location is None or is_public_ip(location) or not public_ips():
             # If location is unspecified or cannot be determined, assume local
-            ip = LOCALHOST
+            ip = localhost()
         elif location:
             return location
     return ip
@@ -198,7 +200,8 @@ def disambiguate_url(url, location=None):
     """turn multi-ip interfaces '0.0.0.0' and '*' into connectable
     ones, based on the location (default interpretation is localhost).
     
-    This is for zeromq urls, such as tcp://*:10101."""
+    This is for zeromq urls, such as ``tcp://*:10101``.
+    """
     try:
         proto,ip,port = split_url(url)
     except AssertionError:
@@ -219,6 +222,15 @@ def interactive(f):
     This results in the function being linked to the user_ns as globals()
     instead of the module globals().
     """
+    
+    # build new FunctionType, so it can have the right globals
+    # interactive functions never have closures, that's kind of the point
+    if isinstance(f, FunctionType):
+        mainmod = __import__('__main__')
+        f = FunctionType(f.__code__, mainmod.__dict__,
+            f.__name__, f.__defaults__,
+        )
+    # associate with __main__ for uncanning
     f.__module__ = '__main__'
     return f
 
@@ -230,9 +242,9 @@ def _push(**ns):
     while tmp in user_ns:
         tmp = tmp + '_'
     try:
-        for name, value in ns.iteritems():
+        for name, value in ns.items():
             user_ns[tmp] = value
-            exec "%s = %s" % (name, tmp) in user_ns
+            exec("%s = %s" % (name, tmp), user_ns)
     finally:
         user_ns.pop(tmp, None)
 
@@ -240,14 +252,14 @@ def _push(**ns):
 def _pull(keys):
     """helper method for implementing `client.pull` via `client.apply`"""
     if isinstance(keys, (list,tuple, set)):
-        return map(lambda key: eval(key, globals()), keys)
+        return [eval(key, globals()) for key in keys]
     else:
         return eval(keys, globals())
 
 @interactive
 def _execute(code):
     """helper method for implementing `client.execute` via `client.apply`"""
-    exec code in globals()
+    exec(code, globals())
 
 #--------------------------------------------------------------------------
 # extra process management utilities
@@ -258,7 +270,7 @@ _random_ports = set()
 def select_random_ports(n):
     """Selects and return n random ports that are available."""
     ports = []
-    for i in xrange(n):
+    for i in range(n):
         sock = socket.socket()
         sock.bind(('', 0))
         while sock.getsockname()[1] in _random_ports:

@@ -25,14 +25,10 @@ try:
 except ImportError:
     import pickle
 
-try:
-    import numpy
-except:
-    numpy = None
-
-import codeutil  # This registers a hook when it's imported
-import py3compat
-from importstring import import_item
+from . import codeutil  # This registers a hook when it's imported
+from . import py3compat
+from .importstring import import_item
+from .py3compat import string_types, iteritems
 
 from IPython.config import Application
 
@@ -42,6 +38,36 @@ if py3compat.PY3:
 else:
     from types import ClassType
     class_type = (type, ClassType)
+
+#-------------------------------------------------------------------------------
+# Functions
+#-------------------------------------------------------------------------------
+
+
+def use_dill():
+    """use dill to expand serialization support
+    
+    adds support for object methods and closures to serialization.
+    """
+    # import dill causes most of the magic
+    import dill
+    
+    # dill doesn't work with cPickle,
+    # tell the two relevant modules to use plain pickle
+    
+    global pickle
+    pickle = dill
+
+    try:
+        from IPython.kernel.zmq import serialize
+    except ImportError:
+        pass
+    else:
+        serialize.pickle = dill
+    
+    # disable special function handling, let dill take care of it
+    can_map.pop(FunctionType, None)
+
 
 #-------------------------------------------------------------------------------
 # Classes
@@ -90,7 +116,7 @@ class CannedObject(object):
 class Reference(CannedObject):
     """object for wrapping a remote reference by name."""
     def __init__(self, name):
-        if not isinstance(name, basestring):
+        if not isinstance(name, string_types):
             raise TypeError("illegal name: %r"%name)
         self.name = name
         self.buffers = []
@@ -109,9 +135,9 @@ class CannedFunction(CannedObject):
 
     def __init__(self, f):
         self._check_type(f)
-        self.code = f.func_code
-        if f.func_defaults:
-            self.defaults = [ can(fd) for fd in f.func_defaults ]
+        self.code = f.__code__
+        if f.__defaults__:
+            self.defaults = [ can(fd) for fd in f.__defaults__ ]
         else:
             self.defaults = None
         self.module = f.__module__ or '__main__'
@@ -163,23 +189,33 @@ class CannedClass(CannedObject):
 
 class CannedArray(CannedObject):
     def __init__(self, obj):
+        from numpy import ascontiguousarray
         self.shape = obj.shape
         self.dtype = obj.dtype.descr if obj.dtype.fields else obj.dtype.str
+        self.pickled = False
         if sum(obj.shape) == 0:
+            self.pickled = True
+        elif obj.dtype == 'O':
+            # can't handle object dtype with buffer approach
+            self.pickled = True
+        elif obj.dtype.fields and any(dt == 'O' for dt,sz in obj.dtype.fields.values()):
+            self.pickled = True
+        if self.pickled:
             # just pickle it
             self.buffers = [pickle.dumps(obj, -1)]
         else:
             # ensure contiguous
-            obj = numpy.ascontiguousarray(obj, dtype=None)
+            obj = ascontiguousarray(obj, dtype=None)
             self.buffers = [buffer(obj)]
     
     def get_object(self, g=None):
+        from numpy import frombuffer
         data = self.buffers[0]
-        if sum(self.shape) == 0:
+        if self.pickled:
             # no shape, we just pickled it
             return pickle.loads(data)
         else:
-            return numpy.frombuffer(data, dtype=self.dtype).reshape(self.shape)
+            return frombuffer(data, dtype=self.dtype).reshape(self.shape)
 
 
 class CannedBytes(CannedObject):
@@ -218,14 +254,14 @@ def _import_mapping(mapping, original=None):
     """
     log = _logger()
     log.debug("Importing canning map")
-    for key,value in mapping.items():
-        if isinstance(key, basestring):
+    for key,value in list(mapping.items()):
+        if isinstance(key, string_types):
             try:
                 cls = import_item(key)
             except Exception:
                 if original and key not in original:
                     # only message on user-added classes
-                    log.error("cannning class not importable: %r", key, exc_info=True)
+                    log.error("canning class not importable: %r", key, exc_info=True)
                 mapping.pop(key)
             else:
                 mapping[cls] = mapping.pop(key)
@@ -248,8 +284,8 @@ def can(obj):
     
     import_needed = False
     
-    for cls,canner in can_map.iteritems():
-        if isinstance(cls, basestring):
+    for cls,canner in iteritems(can_map):
+        if isinstance(cls, string_types):
             import_needed = True
             break
         elif istype(obj, cls):
@@ -273,7 +309,7 @@ def can_dict(obj):
     """can the *values* of a dict"""
     if istype(obj, dict):
         newobj = {}
-        for k, v in obj.iteritems():
+        for k, v in iteritems(obj):
             newobj[k] = can(v)
         return newobj
     else:
@@ -293,8 +329,8 @@ def uncan(obj, g=None):
     """invert canning"""
     
     import_needed = False
-    for cls,uncanner in uncan_map.iteritems():
-        if isinstance(cls, basestring):
+    for cls,uncanner in iteritems(uncan_map):
+        if isinstance(cls, string_types):
             import_needed = True
             break
         elif isinstance(obj, cls):
@@ -311,7 +347,7 @@ def uncan(obj, g=None):
 def uncan_dict(obj, g=None):
     if istype(obj, dict):
         newobj = {}
-        for k, v in obj.iteritems():
+        for k, v in iteritems(obj):
             newobj[k] = uncan(v,g)
         return newobj
     else:

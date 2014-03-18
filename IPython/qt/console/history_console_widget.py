@@ -2,8 +2,9 @@
 from IPython.external.qt import QtGui
 
 # Local imports
+from IPython.utils.py3compat import unicode_type
 from IPython.utils.traitlets import Bool
-from console_widget import ConsoleWidget
+from .console_widget import ConsoleWidget
 
 
 class HistoryConsoleWidget(ConsoleWidget):
@@ -154,15 +155,15 @@ class HistoryConsoleWidget(ConsoleWidget):
     def history_previous(self, substring='', as_prefix=True):
         """ If possible, set the input buffer to a previous history item.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         substring : str, optional
             If specified, search for an item with this substring.
         as_prefix : bool, optional
             If True, the substring must match at the beginning (default).
 
-        Returns:
-        --------
+        Returns
+        -------
         Whether the input buffer was changed.
         """
         index = self._history_index
@@ -185,15 +186,15 @@ class HistoryConsoleWidget(ConsoleWidget):
     def history_next(self, substring='', as_prefix=True):
         """ If possible, set the input buffer to a subsequent history item.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         substring : str, optional
             If specified, search for an item with this substring.
         as_prefix : bool, optional
             If True, the substring must match at the beginning (default).
 
-        Returns:
-        --------
+        Returns
+        -------
         Whether the input buffer was changed.
         """
         index = self._history_index
@@ -216,8 +217,8 @@ class HistoryConsoleWidget(ConsoleWidget):
     def history_tail(self, n=10):
         """ Get the local history list.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         n : int
             The (maximum) number of history items to get.
         """
@@ -285,7 +286,7 @@ class HistoryConsoleWidget(ConsoleWidget):
         if index in self._history_edits:
             return self._history_edits[index]
         elif index == len(self._history):
-            return unicode()
+            return unicode_type()
         return self._history[index]
 
     def _set_history(self, history):

@@ -24,26 +24,26 @@ Tip: to use the tab key as the completion key, call
 Notes:
 
 - Exceptions raised by the completer function are *ignored* (and
-generally cause the completion to fail).  This is a feature -- since
-readline sets the tty device in raw (or cbreak) mode, printing a
-traceback wouldn't work well without some complicated hoopla to save,
-reset and restore the tty state.
+  generally cause the completion to fail).  This is a feature -- since
+  readline sets the tty device in raw (or cbreak) mode, printing a
+  traceback wouldn't work well without some complicated hoopla to save,
+  reset and restore the tty state.
 
 - The evaluation of the NAME.NAME... form may cause arbitrary
-application defined code to be executed if an object with a
-__getattr__ hook is found.  Since it is the responsibility of the
-application (or the user) to enable this feature, I consider this an
-acceptable risk.  More complicated expressions (e.g. function calls or
-indexing operations) are *not* evaluated.
+  application defined code to be executed if an object with a
+  ``__getattr__`` hook is found.  Since it is the responsibility of the
+  application (or the user) to enable this feature, I consider this an
+  acceptable risk.  More complicated expressions (e.g. function calls or
+  indexing operations) are *not* evaluated.
 
 - GNU readline is also used by the built-in functions input() and
-raw_input(), and thus these also benefit/suffer from the completer
-features.  Clearly an interactive application can benefit by
-specifying its own completer function and using raw_input() for all
-its input.
+  raw_input(), and thus these also benefit/suffer from the completer
+  features.  Clearly an interactive application can benefit by
+  specifying its own completer function and using raw_input() for all
+  its input.
 
 - When the original stdin is not a tty device, GNU readline is never
-used, and this module (and the readline module) are silently inactive.
+  used, and this module (and the readline module) are silently inactive.
 """
 
 #*****************************************************************************
@@ -66,7 +66,6 @@ used, and this module (and the readline module) are silently inactive.
 # Imports
 #-----------------------------------------------------------------------------
 
-import __builtin__
 import __main__
 import glob
 import inspect
@@ -83,6 +82,7 @@ from IPython.utils import generics
 from IPython.utils import io
 from IPython.utils.dir2 import dir2
 from IPython.utils.process import arg_split
+from IPython.utils.py3compat import builtin_mod, string_types
 from IPython.utils.traitlets import CBool, Enum
 
 #-----------------------------------------------------------------------------
@@ -175,6 +175,45 @@ def compress_user(path, tilde_expand, tilde_val):
         return path.replace(tilde_val, '~')
     else:
         return path
+
+
+
+def penalize_magics_key(word):
+    """key for sorting that penalizes magic commands in the ordering
+
+    Normal words are left alone.
+
+    Magic commands have the initial % moved to the end, e.g.
+    %matplotlib is transformed as follows:
+
+    %matplotlib -> matplotlib%
+
+    [The choice of the final % is arbitrary.]
+
+    Since "matplotlib" < "matplotlib%" as strings, 
+    "timeit" will appear before the magic "%timeit" in the ordering
+
+    For consistency, move "%%" to the end, so cell magics appear *after*
+    line magics with the same name.
+
+    A check is performed that there are no other "%" in the string; 
+    if there are, then the string is not a magic command and is left unchanged.
+
+    """
+
+    # Move any % signs from start to end of the key 
+    # provided there are no others elsewhere in the string
+
+    if word[:2] == "%%":
+        if not "%" in word[2:]:
+            return word[2:] + "%%" 
+
+    if word[:1] == "%":
+        if not "%" in word[1:]:
+            return word[1:] + "%"
+    
+    return word
+
 
 
 class Bunch(object): pass
@@ -314,7 +353,7 @@ class Completer(Configurable):
         match_append = matches.append
         n = len(text)
         for lst in [keyword.kwlist,
-                    __builtin__.__dict__.keys(),
+                    builtin_mod.__dict__.keys(),
                     self.namespace.keys(),
                     self.global_namespace.keys()]:
             for word in lst:
@@ -384,7 +423,7 @@ def get__all__entries(obj):
     except:
         return []
     
-    return [w for w in words if isinstance(w, basestring)]
+    return [w for w in words if isinstance(w, string_types)]
 
 
 class IPCompleter(Completer):
@@ -431,8 +470,7 @@ class IPCompleter(Completer):
     )
 
     def __init__(self, shell=None, namespace=None, global_namespace=None,
-                 alias_table=None, use_readline=True,
-                 config=None, **kwargs):
+                 use_readline=True, config=None, **kwargs):
         """IPCompleter() -> completer
 
         Return a completer object suitable for use by the readline library
@@ -441,17 +479,14 @@ class IPCompleter(Completer):
         Inputs:
 
         - shell: a pointer to the ipython shell itself.  This is needed
-        because this completer knows about magic functions, and those can
-        only be accessed via the ipython instance.
+          because this completer knows about magic functions, and those can
+          only be accessed via the ipython instance.
 
         - namespace: an optional dict where completions are performed.
 
         - global_namespace: secondary optional dict for completions, to
-        handle cases (such as IPython embedded inside functions) where
-        both Python scopes are visible.
-
-        - If alias_table is supplied, it should be a dictionary of aliases
-        to complete.
+          handle cases (such as IPython embedded inside functions) where
+          both Python scopes are visible.
 
         use_readline : bool, optional
           If true, use the readline library.  This completer can still function
@@ -476,9 +511,6 @@ class IPCompleter(Completer):
         # List where completion matches will be stored
         self.matches = []
         self.shell = shell
-        if alias_table is None:
-            alias_table = {}
-        self.alias_table = alias_table
         # Regexp to split filenames with spaces in them
         self.space_name_re = re.compile(r'([^\\] )')
         # Hold a local ref. to glob.glob for speed
@@ -505,7 +537,6 @@ class IPCompleter(Completer):
         self.matchers = [self.python_matches,
                          self.file_matches,
                          self.magic_matches,
-                         self.alias_matches,
                          self.python_func_kw_matches,
                          ]
 
@@ -627,22 +658,6 @@ class IPCompleter(Completer):
         if not text.startswith(pre2):
             comp += [ pre+m for m in line_magics if m.startswith(bare_text)]
         return comp
-
-    def alias_matches(self, text):
-        """Match internal system aliases"""
-        #print 'Completer->alias_matches:',text,'lb',self.text_until_cursor # dbg
-
-        # if we are not in the first 'item', alias matching
-        # doesn't make sense - unless we are starting with 'sudo' command.
-        main_text = self.text_until_cursor.lstrip()
-        if ' ' in main_text and not main_text.startswith('sudo'):
-            return []
-        text = os.path.expanduser(text)
-        aliases =  self.alias_table.keys()
-        if text == '':
-            return aliases
-        else:
-            return [a for a in aliases if a.startswith(text)]
 
     def python_matches(self,text):
         """Match attributes or global python names"""
@@ -912,7 +927,10 @@ class IPCompleter(Completer):
         # different types of objects.  The rlcomplete() method could then
         # simply collapse the dict into a list for readline, but we'd have
         # richer completion semantics in other evironments.
-        self.matches = sorted(set(self.matches))
+
+        # use penalize_magics_key to put magics after variables with same name
+        self.matches = sorted(set(self.matches), key=penalize_magics_key)
+
         #io.rprint('COMP TEXT, MATCHES: %r, %r' % (text, self.matches)) # dbg
         return text, self.matches
 

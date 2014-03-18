@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-ultratb.py -- Spice up your tracebacks!
+Verbose and colourful traceback formatting.
 
-* ColorTB
+**ColorTB**
+
 I've always found it a bit hard to visually parse tracebacks in Python.  The
 ColorTB class is a solution to that problem.  It colors the different parts of a
 traceback in a manner similar to what you would expect from a syntax-highlighting
 text editor.
 
-Installation instructions for ColorTB:
+Installation instructions for ColorTB::
+
     import sys,ultratb
     sys.excepthook = ultratb.ColorTB()
 
-* VerboseTB
+**VerboseTB**
+
 I've also included a port of Ka-Ping Yee's "cgitb.py" that produces all kinds
 of useful info when a traceback occurs.  Ping originally had it spit out HTML
 and intended it for CGI programmers, but why should they have all the fun?  I
@@ -21,7 +24,7 @@ but kind of neat, and maybe useful for long-running programs that you believe
 are bug-free.  If a crash *does* occur in that type of program you want details.
 Give it a shot--you'll love it or you'll hate it.
 
-Note:
+.. note::
 
   The Verbose mode prints the variables currently visible where the exception
   happened (shortening their strings if too long). This can potentially be
@@ -36,25 +39,28 @@ Note:
   Verbose).
 
 
-Installation instructions for ColorTB:
+Installation instructions for ColorTB::
+
     import sys,ultratb
     sys.excepthook = ultratb.VerboseTB()
 
 Note:  Much of the code in this module was lifted verbatim from the standard
 library module 'traceback.py' and Ka-Ping Yee's 'cgitb.py'.
 
-* Color schemes
+Color schemes
+-------------
+
 The colors are defined in the class TBTools through the use of the
 ColorSchemeTable class. Currently the following exist:
 
   - NoColor: allows all of this module to be used in any terminal (the color
-  escapes are just dummy blank strings).
+    escapes are just dummy blank strings).
 
   - Linux: is meant to look good in a terminal like the Linux console (black
-  or very dark background).
+    or very dark background).
 
   - LightBG: similar to Linux but swaps dark/light colors to be more readable
-  in light background terminals.
+    in light background terminals.
 
 You can implement other color schemes easily, the syntax is fairly
 self-explanatory. Please send back new schemes you develop to the author for
@@ -75,6 +81,7 @@ Inheritance diagram:
 #*****************************************************************************
 
 from __future__ import unicode_literals
+from __future__ import print_function
 
 import inspect
 import keyword
@@ -191,9 +198,9 @@ def findsource(object):
             raise IOError('could not find class definition')
 
     if ismethod(object):
-        object = object.im_func
+        object = object.__func__
     if isfunction(object):
-        object = object.func_code
+        object = object.__code__
     if istraceback(object):
         object = object.tb_frame
     if isframe(object):
@@ -359,8 +366,8 @@ class TBTools(object):
         Valid values are:
 
         - None: the default, which means that IPython will dynamically resolve
-        to io.stdout.  This ensures compatibility with most tools, including
-        Windows (where plain stdout doesn't recognize ANSI escapes).
+          to io.stdout.  This ensures compatibility with most tools, including
+          Windows (where plain stdout doesn't recognize ANSI escapes).
 
         - Any object with 'write' and 'flush' attributes.
         """
@@ -938,7 +945,7 @@ class VerboseTB(TBTools):
                                      ColorsNormal, py3compat.cast_unicode(evalue_str))]
         if (not py3compat.PY3) and type(evalue) is types.InstanceType:
             try:
-                names = [w for w in dir(evalue) if isinstance(w, basestring)]
+                names = [w for w in dir(evalue) if isinstance(w, py3compat.string_types)]
             except:
                 # Every now and then, an object with funny inernals blows up
                 # when dir() is called on it.  We do the best we can to report
@@ -974,9 +981,9 @@ class VerboseTB(TBTools):
         Keywords:
 
           - force(False): by default, this routine checks the instance call_pdb
-          flag and does not actually invoke the debugger if the flag is false.
-          The 'force' option forces the debugger to activate even if the flag
-          is false.
+            flag and does not actually invoke the debugger if the flag is false.
+            The 'force' option forces the debugger to activate even if the flag
+            is false.
 
         If the call_pdb flag is set, the pdb interactive debugger is
         invoked. In all cases, the self.tb reference to the current traceback
@@ -1031,7 +1038,7 @@ class VerboseTB(TBTools):
         try:
             self.debugger()
         except KeyboardInterrupt:
-            print "\nKeyboardInterrupt"
+            print("\nKeyboardInterrupt")
 
 #----------------------------------------------------------------------------
 class FormattedTB(VerboseTB, ListTB):
@@ -1162,7 +1169,7 @@ class AutoFormattedTB(FormattedTB):
         try:
             self.debugger()
         except KeyboardInterrupt:
-            print "\nKeyboardInterrupt"
+            print("\nKeyboardInterrupt")
 
     def structured_traceback(self, etype=None, value=None, tb=None,
                              tb_offset=None, context=5):
@@ -1193,6 +1200,21 @@ class SyntaxTB(ListTB):
         self.last_syntax_error = value
         ListTB.__call__(self,etype,value,elist)
 
+    def structured_traceback(self, etype, value, elist, tb_offset=None,
+                             context=5):
+        # If the source file has been edited, the line in the syntax error can
+        # be wrong (retrieved from an outdated cache). This replaces it with
+        # the current value.
+        if isinstance(value, SyntaxError) \
+                and isinstance(value.filename, py3compat.string_types) \
+                and isinstance(value.lineno, int):
+            linecache.checkcache(value.filename)
+            newtext = ulinecache.getline(value.filename, value.lineno)
+            if newtext:
+                value.text = newtext
+        return super(SyntaxTB, self).structured_traceback(etype, value, elist,
+                             tb_offset=tb_offset, context=context)
+
     def clear_err_state(self):
         """Return the current error state and clear it"""
         e = self.last_syntax_error
@@ -1221,27 +1243,27 @@ if __name__ == "__main__":
         i = f - g
         return h / i
 
-    print ''
-    print '*** Before ***'
+    print('')
+    print('*** Before ***')
     try:
-        print spam(1, (2, 3))
+        print(spam(1, (2, 3)))
     except:
         traceback.print_exc()
-    print ''
+    print('')
 
     handler = ColorTB()
-    print '*** ColorTB ***'
+    print('*** ColorTB ***')
     try:
-        print spam(1, (2, 3))
+        print(spam(1, (2, 3)))
     except:
         handler(*sys.exc_info())
-    print ''
+    print('')
 
     handler = VerboseTB()
-    print '*** VerboseTB ***'
+    print('*** VerboseTB ***')
     try:
-        print spam(1, (2, 3))
+        print(spam(1, (2, 3)))
     except:
         handler(*sys.exc_info())
-    print ''
+    print('')
 

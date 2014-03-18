@@ -19,18 +19,12 @@ import bdb
 import os
 import sys
 
-# We need to use nested to support python 2.6, once we move to >=2.7, we can
-# use the with keyword's new builtin support for nested managers
-try:
-    from contextlib import nested
-except:
-    from IPython.utils.nested_context import nested
-
 from IPython.core.error import TryNext, UsageError
 from IPython.core.usage import interactive_usage, default_banner
 from IPython.core.inputsplitter import IPythonInputSplitter
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, magics_class, line_magic
+from IPython.lib.clipboard import ClipboardEmpty
 from IPython.testing.skipdoctest import skip_doctest
 from IPython.utils.encoding import get_stream_enc
 from IPython.utils import py3compat
@@ -47,22 +41,32 @@ from IPython.utils.traitlets import Integer, CBool, Unicode
 def get_default_editor():
     try:
         ed = os.environ['EDITOR']
+        if not py3compat.PY3:
+            ed = ed.decode()
+        return ed
     except KeyError:
-        if os.name == 'posix':
-            ed = 'vi'  # the only one guaranteed to be there!
-        else:
-            ed = 'notepad' # same in Windows!
-    return ed
+        pass
+    except UnicodeError:
+        warn("$EDITOR environment variable is not pure ASCII. Using platform "
+             "default editor.")
 
+    if os.name == 'posix':
+        return 'vi'  # the only one guaranteed to be there!
+    else:
+        return 'notepad' # same in Windows!
 
-def get_pasted_lines(sentinel, l_input=py3compat.input):
+def get_pasted_lines(sentinel, l_input=py3compat.input, quiet=False):
     """ Yield pasted lines until the user enters the given sentinel value.
     """
-    print("Pasting code; enter '%s' alone on the line to stop or use Ctrl-D." \
-          % sentinel)
+    if not quiet:
+        print("Pasting code; enter '%s' alone on the line to stop or use Ctrl-D." \
+              % sentinel)
+        prompt = ":"
+    else:
+        prompt = ""
     while True:
         try:
-            l = l_input(':')
+            l = l_input(prompt)
             if l == sentinel:
                 return
             else:
@@ -112,7 +116,7 @@ class TerminalMagics(Magics):
         # Sanity checks
         if b is None:
             raise UsageError('No previous pasted block available')
-        if not isinstance(b, basestring):
+        if not isinstance(b, py3compat.string_types):
             raise UsageError(
                 "Variable 'pasted_block' is not a string, can't execute")
 
@@ -133,7 +137,7 @@ class TerminalMagics(Magics):
 
         You must terminate the block with '--' (two minus-signs) or Ctrl-D
         alone on the line. You can also provide your own sentinel with '%paste
-        -s %%' ('%%' is the new sentinel for this operation)
+        -s %%' ('%%' is the new sentinel for this operation).
 
         The block is dedented prior to execution to enable execution of method
         definitions. '>' and '+' characters at the beginning of a line are
@@ -147,6 +151,7 @@ class TerminalMagics(Magics):
         dedenting or executing it (preceding >>> and + is still stripped)
 
         '%cpaste -r' re-executes the block previously entered by cpaste.
+        '%cpaste -q' suppresses any additional output messages.
 
         Do not be alarmed by garbled output on Windows (it's a readline bug).
         Just press enter and type -- (and press enter again) and the block
@@ -169,13 +174,15 @@ class TerminalMagics(Magics):
           :--
           Hello world!
         """
-        opts, name = self.parse_options(parameter_s, 'rs:', mode='string')
+        opts, name = self.parse_options(parameter_s, 'rqs:', mode='string')
         if 'r' in opts:
             self.rerun_pasted()
             return
 
+        quiet = ('q' in opts)
+
         sentinel = opts.get('s', '--')
-        block = '\n'.join(get_pasted_lines(sentinel))
+        block = '\n'.join(get_pasted_lines(sentinel, quiet=quiet))
         self.store_or_execute(block, name)
 
     @line_magic
@@ -197,8 +204,7 @@ class TerminalMagics(Magics):
         This assigns the pasted block to variable 'foo' as string, without
         executing it (preceding >>> and + is still stripped).
 
-        Options
-        -------
+        Options:
 
           -r: re-executes the block previously entered by cpaste.
 
@@ -223,6 +229,8 @@ class TerminalMagics(Magics):
             else:
                 error('Could not get text from the clipboard.')
             return
+        except ClipboardEmpty:
+            raise UsageError("The clipboard appears to be empty")
 
         # By default, echo back to terminal unless quiet mode is requested
         if 'q' not in opts:
@@ -371,12 +379,11 @@ class TerminalInteractiveShell(InteractiveShell):
         if os.name == 'posix':
             aliases = [('clear', 'clear'), ('more', 'more'), ('less', 'less'),
                        ('man', 'man')]
-        elif os.name == 'nt':
-            aliases = [('cls', 'cls')]
-
+        else :
+            aliases = []
 
         for name, cmd in aliases:
-            self.alias_manager.define_alias(name, cmd)
+            self.alias_manager.soft_define_alias(name, cmd)
 
     #-------------------------------------------------------------------------
     # Things related to the banner and usage
@@ -429,7 +436,7 @@ class TerminalInteractiveShell(InteractiveShell):
         internally created default banner.
         """
 
-        with nested(self.builtin_trap, self.display_trap):
+        with self.builtin_trap, self.display_trap:
 
             while 1:
                 try:
@@ -480,7 +487,7 @@ class TerminalInteractiveShell(InteractiveShell):
         if display_banner is None:
             display_banner = self.display_banner
 
-        if isinstance(display_banner, basestring):
+        if isinstance(display_banner, py3compat.string_types):
             self.show_banner(display_banner)
         elif display_banner:
             self.show_banner()
@@ -522,7 +529,7 @@ class TerminalInteractiveShell(InteractiveShell):
                 #double-guard against keyboardinterrupts during kbdint handling
                 try:
                     self.write('\nKeyboardInterrupt\n')
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
                     more = False
@@ -545,13 +552,18 @@ class TerminalInteractiveShell(InteractiveShell):
                 # asynchronously by signal handlers, for example.
                 self.showtraceback()
             else:
-                self.input_splitter.push(line)
-                more = self.input_splitter.push_accepts_more()
+                try:
+                    self.input_splitter.push(line)
+                    more = self.input_splitter.push_accepts_more()
+                except SyntaxError:
+                    # Run the code directly - run_cell takes care of displaying
+                    # the exception.
+                    more = False
                 if (self.SyntaxTB.last_syntax_error and
                     self.autoedit_syntax):
                     self.edit_syntax_error()
                 if not more:
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     self.run_cell(source_raw, store_history=True)
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
@@ -565,19 +577,12 @@ class TerminalInteractiveShell(InteractiveShell):
         The returned line does not include the trailing newline.
         When the user enters the EOF key sequence, EOFError is raised.
 
-        Optional inputs:
+        Parameters
+        ----------
 
-          - prompt(''): a string to be printed to prompt the user.
-
-          - continue_prompt(False): whether this line is the first one or a
-          continuation in a sequence of inputs.
+        prompt : str, optional
+          A string to be printed to prompt the user.
         """
-        # Code run by the user may have modified the readline completer state.
-        # We must ensure that our completer is back in place.
-
-        if self.has_readline:
-            self.set_readline_completer()
-        
         # raw_input expects str, but we pass it unicode sometimes
         prompt = py3compat.cast_bytes_py2(prompt)
 

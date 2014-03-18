@@ -49,7 +49,8 @@ from IPython.config.configurable import Configurable, LoggingConfigurable
 from IPython.utils import io
 from IPython.utils.importstring import import_item
 from IPython.utils.jsonutil import extract_dates, squash_dates, date_default
-from IPython.utils.py3compat import str_to_bytes, str_to_unicode
+from IPython.utils.py3compat import (str_to_bytes, str_to_unicode, unicode_type,
+                                     iteritems)
 from IPython.utils.traitlets import (CBytes, Unicode, Bool, Any, Instance, Set,
                                         DottedObjectName, CUnicode, Dict, Integer,
                                         TraitError,
@@ -65,12 +66,12 @@ def squash_unicode(obj):
     if isinstance(obj,dict):
         for key in obj.keys():
             obj[key] = squash_unicode(obj[key])
-            if isinstance(key, unicode):
+            if isinstance(key, unicode_type):
                 obj[squash_unicode(key)] = obj.pop(key)
     elif isinstance(obj, list):
         for i,v in enumerate(obj):
             obj[i] = squash_unicode(v)
-    elif isinstance(obj, unicode):
+    elif isinstance(obj, unicode_type):
         obj = obj.encode('utf8')
     return obj
 
@@ -80,9 +81,9 @@ def squash_unicode(obj):
 
 # ISO8601-ify datetime objects
 json_packer = lambda obj: jsonapi.dumps(obj, default=date_default)
-json_unpacker = lambda s: extract_dates(jsonapi.loads(s))
+json_unpacker = lambda s: jsonapi.loads(s)
 
-pickle_packer = lambda o: pickle.dumps(o,-1)
+pickle_packer = lambda o: pickle.dumps(squash_dates(o),-1)
 pickle_unpacker = pickle.loads
 
 default_packer = json_packer
@@ -166,14 +167,14 @@ class Message(object):
 
     def __init__(self, msg_dict):
         dct = self.__dict__
-        for k, v in dict(msg_dict).iteritems():
+        for k, v in iteritems(dict(msg_dict)):
             if isinstance(v, dict):
                 v = Message(v)
             dct[k] = v
 
     # Having this iterator lets dict(msg_obj) work out of the box.
     def __iter__(self):
-        return iter(self.__dict__.iteritems())
+        return iter(iteritems(self.__dict__))
 
     def __repr__(self):
         return repr(self.__dict__)
@@ -288,7 +289,7 @@ class Session(Configurable):
     session = CUnicode(u'', config=True,
         help="""The UUID identifying this session.""")
     def _session_default(self):
-        u = unicode(uuid.uuid4())
+        u = unicode_type(uuid.uuid4())
         self.bsession = u.encode('ascii')
         return u
 
@@ -428,7 +429,7 @@ class Session(Configurable):
         return str(uuid.uuid4())
 
     def _check_packers(self):
-        """check packers for binary data and datetime support."""
+        """check packers for datetime support."""
         pack = self.pack
         unpack = self.unpack
 
@@ -436,8 +437,15 @@ class Session(Configurable):
         msg = dict(a=[1,'hi'])
         try:
             packed = pack(msg)
-        except Exception:
-            raise ValueError("packer could not serialize a simple message")
+        except Exception as e:
+            msg = "packer '{packer}' could not serialize a simple message: {e}{jsonmsg}"
+            if self.packer == 'json':
+                jsonmsg = "\nzmq.utils.jsonapi.jsonmod = %s" % jsonapi.jsonmod
+            else:
+                jsonmsg = ""
+            raise ValueError(
+                msg.format(packer=self.packer, e=e, jsonmsg=jsonmsg)
+            )
 
         # ensure packed message is bytes
         if not isinstance(packed, bytes):
@@ -446,16 +454,26 @@ class Session(Configurable):
         # check that unpack is pack's inverse
         try:
             unpacked = unpack(packed)
-        except Exception:
-            raise ValueError("unpacker could not handle the packer's output")
+            assert unpacked == msg
+        except Exception as e:
+            msg = "unpacker '{unpacker}' could not handle output from packer '{packer}': {e}{jsonmsg}"
+            if self.packer == 'json':
+                jsonmsg = "\nzmq.utils.jsonapi.jsonmod = %s" % jsonapi.jsonmod
+            else:
+                jsonmsg = ""
+            raise ValueError(
+                msg.format(packer=self.packer, unpacker=self.unpacker, e=e, jsonmsg=jsonmsg)
+            )
 
         # check datetime support
         msg = dict(t=datetime.now())
         try:
             unpacked = unpack(pack(msg))
+            if isinstance(unpacked['t'], datetime):
+                raise ValueError("Shouldn't deserialize to datetime")
         except Exception:
             self.pack = lambda o: pack(squash_dates(o))
-            self.unpack = lambda s: extract_dates(unpack(s))
+            self.unpack = lambda s: unpack(s)
 
     def msg_header(self, msg_type):
         return msg_header(self.msg_id, msg_type, self.username, self.session)
@@ -509,11 +527,13 @@ class Session(Configurable):
         Returns
         -------
         msg_list : list
-            The list of bytes objects to be sent with the format:
-            [ident1,ident2,...,DELIM,HMAC,p_header,p_parent,p_metadata,p_content,
-             buffer1,buffer2,...]. In this list, the p_* entities are
-            the packed or serialized versions, so if JSON is used, these
-            are utf8 encoded JSON strings.
+            The list of bytes objects to be sent with the format::
+
+                [ident1, ident2, ..., DELIM, HMAC, p_header, p_parent,
+                 p_metadata, p_content, buffer1, buffer2, ...]
+
+            In this list, the ``p_*`` entities are the packed or serialized
+            versions, so if JSON is used, these are utf8 encoded JSON strings.
         """
         content = msg.get('content', {})
         if content is None:
@@ -523,7 +543,7 @@ class Session(Configurable):
         elif isinstance(content, bytes):
             # content is already packed, as in a relayed message
             pass
-        elif isinstance(content, unicode):
+        elif isinstance(content, unicode_type):
             # should be bytes, but JSON often spits out unicode
             content = content.encode('utf8')
         else:
@@ -659,7 +679,7 @@ class Session(Configurable):
         to_send.append(DELIM)
         to_send.append(self.sign(msg_list))
         to_send.extend(msg_list)
-        stream.send_multipart(msg_list, flags, copy=copy)
+        stream.send_multipart(to_send, flags, copy=copy)
 
     def recv(self, socket, mode=zmq.NOBLOCK, content=True, copy=True):
         """Receive and unpack a message.
@@ -763,8 +783,8 @@ class Session(Configurable):
         methods work with full message lists, whereas pack/unpack work with
         the individual message parts in the message list.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         msg_list : list of bytes or Message objects
             The list of message parts of the form [HMAC,p_header,p_parent,
             p_metadata,p_content,buffer1,buffer2,...].
@@ -799,10 +819,10 @@ class Session(Configurable):
         if not len(msg_list) >= minlen:
             raise TypeError("malformed message, must have at least %i elements"%minlen)
         header = self.unpack(msg_list[1])
-        message['header'] = header
+        message['header'] = extract_dates(header)
         message['msg_id'] = header['msg_id']
         message['msg_type'] = header['msg_type']
-        message['parent_header'] = self.unpack(msg_list[2])
+        message['parent_header'] = extract_dates(self.unpack(msg_list[2]))
         message['metadata'] = self.unpack(msg_list[3])
         if content:
             message['content'] = self.unpack(msg_list[4])

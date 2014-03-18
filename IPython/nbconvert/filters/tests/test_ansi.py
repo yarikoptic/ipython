@@ -39,7 +39,7 @@ class TestAnsi(TestsBase):
             'hello' : 'hello'}
 
         for inval, outval in correct_outputs.items():
-            yield self._try_strip_ansi(inval, outval)
+            self._try_strip_ansi(inval, outval)
 
 
     def _try_strip_ansi(self, inval, outval):
@@ -58,7 +58,7 @@ class TestAnsi(TestsBase):
             'hello' : 'hello'}
 
         for inval, outval in correct_outputs.items():
-            yield self._try_ansi2html(inval, outval)
+            self._try_ansi2html(inval, outval)
 
 
     def _try_ansi2html(self, inval, outval):
@@ -68,16 +68,21 @@ class TestAnsi(TestsBase):
     def test_ansi2latex(self):
         """ansi2latex test"""
         correct_outputs = {
-            '%s' % (TermColors.Red)  : r'\red{}',
-            'hello%s' % TermColors.Blue: r'hello\blue{}',
-            'he%s%sllo' % (TermColors.Green, TermColors.Cyan) : r'he\green{}\cyan{llo}',
-            '%shello' % TermColors.Yellow : r'\yellow{hello}',
-            '{0}h{0}e{0}l{0}l{0}o{0}'.format(TermColors.White) : r'\white{h}\white{e}\white{l}\white{l}\white{o}\white{}',
-            'hel%slo' % TermColors.Green : r'hel\green{lo}',
-            'hello' : 'hello'}
+            '%s' % (TermColors.Red)  : r'{\color{red}}',
+            'hello%s' % TermColors.Blue: r'hello{\color{blue}}',
+            'he%s%sllo' % (TermColors.Green, TermColors.Cyan) : r'he{\color{green}}{\color{cyan}llo}',
+            '%shello' % TermColors.Yellow : r'\textbf{\color{yellow}hello}',
+            '{0}h{0}e{0}l{0}l{0}o{0}'.format(TermColors.White) : r'\textbf{\color{white}h}\textbf{\color{white}e}\textbf{\color{white}l}\textbf{\color{white}l}\textbf{\color{white}o}\textbf{\color{white}}',
+            'hel%slo' % TermColors.Green : r'hel{\color{green}lo}',
+            'hello' : 'hello',
+            u'hello\x1b[34mthere\x1b[mworld' : u'hello{\\color{blue}there}world',
+            u'hello\x1b[mthere': u'hellothere',
+            u'hello\x1b[01;34mthere' : u"hello\\textbf{\\color{lightblue}there}",
+            u'hello\x1b[001;34mthere' : u"hello\\textbf{\\color{lightblue}there}"
+            }
 
         for inval, outval in correct_outputs.items():
-            yield self._try_ansi2latex(inval, outval)
+            self._try_ansi2latex(inval, outval)
 
 
     def _try_ansi2latex(self, inval, outval):

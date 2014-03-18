@@ -22,20 +22,32 @@ Authors
 # stdlib
 import ast
 import os
+import signal
 import shutil
 import sys
 import tempfile
 import unittest
+try:
+    from unittest import mock
+except ImportError:
+    import mock
 from os.path import join
-from StringIO import StringIO
 
 # third-party
 import nose.tools as nt
 
 # Our own
-from IPython.testing.decorators import skipif, onlyif_unicode_paths
+from IPython.core.inputtransformer import InputTransformer
+from IPython.testing.decorators import skipif, skip_win32, onlyif_unicode_paths
 from IPython.testing import tools as tt
 from IPython.utils import io
+from IPython.utils import py3compat
+from IPython.utils.py3compat import unicode_type, PY3
+
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -106,17 +118,6 @@ class InteractiveShellTestCase(unittest.TestCase):
         ip.run_cell('a = """\n%exit\n"""')
         self.assertEqual(ip.user_ns['a'], '\n%exit\n')
     
-    def test_alias_crash(self):
-        """Errors in prefilter can't crash IPython"""
-        ip.run_cell('%alias parts echo first %s second %s')
-        # capture stderr:
-        save_err = io.stderr
-        io.stderr = StringIO()
-        ip.run_cell('parts 1')
-        err = io.stderr.getvalue()
-        io.stderr = save_err
-        self.assertEqual(err.split(':')[0], 'ERROR')
-    
     def test_trailing_newline(self):
         """test that running !(command) does not raise a SyntaxError"""
         ip.run_cell('!(true)\n', False)
@@ -150,7 +151,7 @@ class InteractiveShellTestCase(unittest.TestCase):
             assert isinstance(ip.user_ns['byte_str'], str) # string literals are byte strings by default
             ip.run_cell('from __future__ import unicode_literals')
             ip.run_cell(u'unicode_str = "a"')
-            assert isinstance(ip.user_ns['unicode_str'], unicode) # strings literals are now unicode
+            assert isinstance(ip.user_ns['unicode_str'], unicode_type) # strings literals are now unicode
         finally:
             # Reset compiler flags so we don't mess up other tests.
             ip.compile.reset_compiler_flags()
@@ -164,7 +165,7 @@ class InteractiveShellTestCase(unittest.TestCase):
                      "        list.__init__(self,x)"))
         ip.run_cell("w=Mylist([1,2,3])")
         
-        from cPickle import dumps
+        from pickle import dumps
         
         # We need to swap in our main module - this is only necessary
         # inside the test framework, because IPython puts the interactive module
@@ -280,21 +281,32 @@ class InteractiveShellTestCase(unittest.TestCase):
         # ZeroDivisionError
         self.assertEqual(ip.var_expand(u"{1/0}"), u"{1/0}")
     
-    def test_silent_nopostexec(self):
-        """run_cell(silent=True) doesn't invoke post-exec funcs"""
-        d = dict(called=False)
-        def set_called():
-            d['called'] = True
+    def test_silent_postexec(self):
+        """run_cell(silent=True) doesn't invoke pre/post_run_cell callbacks"""
+        pre_explicit = mock.Mock()
+        pre_always = mock.Mock()
+        post_explicit = mock.Mock()
+        post_always = mock.Mock()
         
-        ip.register_post_execute(set_called)
-        ip.run_cell("1", silent=True)
-        self.assertFalse(d['called'])
-        # double-check that non-silent exec did what we expected
-        # silent to avoid
-        ip.run_cell("1")
-        self.assertTrue(d['called'])
-        # remove post-exec
-        ip._post_execute.pop(set_called)
+        ip.events.register('pre_run_cell', pre_explicit)
+        ip.events.register('pre_execute', pre_always)
+        ip.events.register('post_run_cell', post_explicit)
+        ip.events.register('post_execute', post_always)
+        
+        try:
+            ip.run_cell("1", silent=True)
+            assert pre_always.called
+            assert not pre_explicit.called
+            assert post_always.called
+            assert not post_explicit.called
+            # double-check that non-silent exec did what we expected
+            # silent to avoid
+            ip.run_cell("1")
+            assert pre_explicit.called
+            assert post_explicit.called
+        finally:
+            # remove post-exec
+            ip.events.reset_all()
     
     def test_silent_noadvance(self):
         """run_cell(silent=True) doesn't advance execution_count"""
@@ -411,7 +423,7 @@ class TestSafeExecfileNonAsciiPath(unittest.TestCase):
         os.mkdir(self.TESTDIR)
         with open(join(self.TESTDIR, u"åäötestscript.py"), "w") as sfile:
             sfile.write("pass\n")
-        self.oldpath = os.getcwdu()
+        self.oldpath = py3compat.getcwd()
         os.chdir(self.TESTDIR)
         self.fname = u"åäötestscript.py"
 
@@ -425,19 +437,48 @@ class TestSafeExecfileNonAsciiPath(unittest.TestCase):
         """
         ip.safe_execfile(self.fname, {}, raise_exceptions=True)
 
+class ExitCodeChecks(tt.TempFileMixin):
+    def test_exit_code_ok(self):
+        self.system('exit 0')
+        self.assertEqual(ip.user_ns['_exit_code'], 0)
 
-class TestSystemRaw(unittest.TestCase):
+    def test_exit_code_error(self):
+        self.system('exit 1')
+        self.assertEqual(ip.user_ns['_exit_code'], 1)
+
+    @skipif(not hasattr(signal, 'SIGALRM'))
+    def test_exit_code_signal(self):
+        self.mktmp("import signal, time\n"
+                   "signal.setitimer(signal.ITIMER_REAL, 0.1)\n"
+                   "time.sleep(1)\n")
+        self.system("%s %s" % (sys.executable, self.fname))
+        self.assertEqual(ip.user_ns['_exit_code'], -signal.SIGALRM)
+
+class TestSystemRaw(unittest.TestCase, ExitCodeChecks):
+    system = ip.system_raw
+
     @onlyif_unicode_paths
     def test_1(self):
         """Test system_raw with non-ascii cmd
         """
-        cmd = ur'''python -c "'åäö'"   '''
+        cmd = u'''python -c "'åäö'"   '''
         ip.system_raw(cmd)
-    
-    def test_exit_code(self):
-        """Test that the exit code is parsed correctly."""
-        ip.system_raw('exit 1')
-        self.assertEqual(ip.user_ns['_exit_code'], 1)
+
+# TODO: Exit codes are currently ignored on Windows.
+class TestSystemPipedExitCode(unittest.TestCase, ExitCodeChecks):
+    system = ip.system_piped
+
+    @skip_win32
+    def test_exit_code_ok(self):
+        ExitCodeChecks.test_exit_code_ok(self)
+
+    @skip_win32
+    def test_exit_code_error(self):
+        ExitCodeChecks.test_exit_code_error(self)
+
+    @skip_win32
+    def test_exit_code_signal(self):
+        ExitCodeChecks.test_exit_code_signal(self)
 
 class TestModules(unittest.TestCase, tt.TempFileMixin):
     def test_extraneous_loads(self):
@@ -630,7 +671,7 @@ def test_user_expression():
     r = ip.user_expressions(query)
     import pprint
     pprint.pprint(r)
-    nt.assert_equal(r.keys(), query.keys())
+    nt.assert_equal(set(r.keys()), set(query.keys()))
     a = r['a']
     nt.assert_equal(set(['status', 'data', 'metadata']), set(a.keys()))
     nt.assert_equal(a['status'], 'ok')
@@ -647,6 +688,43 @@ def test_user_expression():
     
 
 
+
+
+class TestSyntaxErrorTransformer(unittest.TestCase):
+    """Check that SyntaxError raised by an input transformer is handled by run_cell()"""
+
+    class SyntaxErrorTransformer(InputTransformer):
+
+        def push(self, line):
+            pos = line.find('syntaxerror')
+            if pos >= 0:
+                e = SyntaxError('input contains "syntaxerror"')
+                e.text = line
+                e.offset = pos + 1
+                raise e
+            return line
+
+        def reset(self):
+            pass
+
+    def setUp(self):
+        self.transformer = TestSyntaxErrorTransformer.SyntaxErrorTransformer()
+        ip.input_splitter.python_line_transforms.append(self.transformer)
+        ip.input_transformer_manager.python_line_transforms.append(self.transformer)
+
+    def tearDown(self):
+        ip.input_splitter.python_line_transforms.remove(self.transformer)
+        ip.input_transformer_manager.python_line_transforms.remove(self.transformer)
+
+    def test_syntaxerror_input_transformer(self):
+        with tt.AssertPrints('1234'):
+            ip.run_cell('1234')
+        with tt.AssertPrints('SyntaxError: invalid syntax'):
+            ip.run_cell('1 2 3')   # plain python syntax error
+        with tt.AssertPrints('SyntaxError: input contains "syntaxerror"'):
+            ip.run_cell('2345  # syntaxerror')  # input transformer syntax error
+        with tt.AssertPrints('3456'):
+            ip.run_cell('3456')
 
 
 

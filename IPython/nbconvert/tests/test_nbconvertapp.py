@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*- 
 """Test NbConvertApp"""
 
 #-----------------------------------------------------------------------------
@@ -19,13 +20,6 @@ from .base import TestsBase
 
 import IPython.testing.tools as tt
 from IPython.testing import decorators as dec
-from IPython.external.decorators import knownfailureif
-
-
-#-----------------------------------------------------------------------------
-# Constants
-#-----------------------------------------------------------------------------
-
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -39,8 +33,8 @@ class TestNbConvertApp(TestsBase):
         """Will help show if no notebooks are specified?"""
         with self.create_temp_cwd():
             out, err = self.call('nbconvert --log-level 0', ignore_return_code=True)
-            self.assertTrue("see '--help-all'" in out, out)
-
+            self.assertIn("see '--help-all'", out)
+    
     def test_help_output(self):
         """ipython nbconvert --help-all works"""
         tt.help_all_output_test('nbconvert')
@@ -61,7 +55,7 @@ class TestNbConvertApp(TestsBase):
         """
         with self.create_temp_cwd():
             self.copy_files_to(['notebook*.ipynb'], 'subdir/')
-            self.call('nbconvert --to python --log-level 0 ' +
+            self.call('nbconvert --to python --log-level 0 ' + 
                       os.path.join('subdir', '*.ipynb'))
             assert os.path.isfile('notebook1.py')
             assert os.path.isfile('notebook2.py')
@@ -85,7 +79,7 @@ class TestNbConvertApp(TestsBase):
         """
         with self.create_temp_cwd(['notebook2.ipynb']):
             os.rename('notebook2.ipynb', 'notebook with spaces.ipynb')
-            o,e = self.call('nbconvert --log-level 0 --to latex '
+            self.call('nbconvert --log-level 0 --to latex '
                             '"notebook with spaces" --post PDF '
                             '--PDFPostProcessor.verbose=True')
             assert os.path.isfile('notebook with spaces.tex')
@@ -104,6 +98,20 @@ class TestNbConvertApp(TestsBase):
             assert os.path.isfile('notebook1.tex')
             assert os.path.isfile('notebook1.pdf')
 
+    @dec.onlyif_cmds_exist('pandoc')
+    def test_spurious_cr(self):
+        """Check for extra CR characters"""
+        with self.create_temp_cwd(['notebook2.ipynb']):
+            self.call('nbconvert --log-level 0 --to latex notebook2')
+            assert os.path.isfile('notebook2.tex')
+            with open('notebook2.tex') as f:
+                tex = f.read()
+            self.call('nbconvert --log-level 0 --to html notebook2')
+            assert os.path.isfile('notebook2.html')
+            with open('notebook2.html') as f:
+                html = f.read()
+        self.assertEqual(tex.count('\r'), tex.count('\r\n'))
+        self.assertEqual(html.count('\r'), html.count('\r\n'))
 
     @dec.onlyif_cmds_exist('pandoc')
     def test_png_base64_html_ok(self):
@@ -115,15 +123,14 @@ class TestNbConvertApp(TestsBase):
             with open('notebook2.html') as f:
                 assert "data:image/png;base64,b'" not in f.read()
 
-
     @dec.onlyif_cmds_exist('pandoc')
     def test_template(self):
         """
         Do export templates work?
         """
         with self.create_temp_cwd(['notebook2.ipynb']):
-            self.call('nbconvert --log-level 0 --to slides '
-                      'notebook2.ipynb --template reveal')
+            self.call('nbconvert --log-level 0 --to slides '  
+                      'notebook2.ipynb')
             assert os.path.isfile('notebook2.slides.html')
             with open('notebook2.slides.html') as f:
                 assert '/reveal.css' in f.read()
@@ -171,3 +178,25 @@ class TestNbConvertApp(TestsBase):
             self.call('nbconvert --log-level 0 --config="override.py"')
             assert not os.path.isfile('notebook1.py')
             assert os.path.isfile('notebook2.py')
+
+    def test_accents_in_filename(self):
+        """
+        Can notebook names include accents?
+        """
+        with self.create_temp_cwd():
+            self.create_empty_notebook(u'nb1_análisis.ipynb')
+            self.call('nbconvert --log-level 0 --to python nb1_*')
+            assert os.path.isfile(u'nb1_análisis.py')
+    
+    @dec.onlyif_cmds_exist('pdflatex', 'pandoc')
+    def test_filename_accent_pdf(self):
+        """
+        Generate PDFs if notebooks have an accent in their name?
+        """
+        with self.create_temp_cwd():
+            self.create_empty_notebook(u'nb1_análisis.ipynb')
+            self.call('nbconvert --log-level 0 --to latex '
+                            '"nb1_*" --post PDF '
+                            '--PDFPostProcessor.verbose=True')
+            assert os.path.isfile(u'nb1_análisis.tex')
+            assert os.path.isfile(u'nb1_análisis.pdf')

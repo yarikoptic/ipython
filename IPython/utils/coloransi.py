@@ -48,8 +48,9 @@ color_templates = (
 def make_color_table(in_class):
     """Build a set of color attributes in a class.
 
-    Helper function for building the *TermColors classes."""
-
+    Helper function for building the :class:`TermColors` and
+    :class`InputTermColors`.
+    """
     for name,value in color_templates:
         setattr(in_class,name,in_class._base % value)
 
@@ -166,7 +167,7 @@ class ColorSchemeTable(dict):
         Names are by default compared in a case-insensitive way, but this can
         be changed by setting the parameter case_sensitive to true."""
 
-        scheme_names = self.keys()
+        scheme_names = list(self.keys())
         if case_sensitive:
             valid_schemes = scheme_names
             scheme_test = scheme

@@ -12,7 +12,6 @@ from __future__ import absolute_import
 import io
 import os
 import sys
-from StringIO import StringIO
 from unittest import TestCase
 
 try:
@@ -38,6 +37,11 @@ from IPython.utils.io import capture_output
 from IPython.utils.tempdir import TemporaryDirectory
 from IPython.utils.process import find_cmd
 
+if py3compat.PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
+
 #-----------------------------------------------------------------------------
 # Test functions begin
 #-----------------------------------------------------------------------------
@@ -45,19 +49,64 @@ from IPython.utils.process import find_cmd
 @magic.magics_class
 class DummyMagics(magic.Magics): pass
 
+def test_extract_code_ranges():
+    instr = "1 3 5-6 7-9 10:15 17: :10 10- -13 :"
+    expected = [(0, 1), 
+                (2, 3),
+                (4, 6),
+                (6, 9),
+                (9, 14),
+                (16, None),
+                (None, 9),
+                (9, None),
+                (None, 13),
+                (None, None)]
+    actual = list(code.extract_code_ranges(instr))
+    nt.assert_equal(actual, expected)
+
+def test_extract_symbols():
+    source = """import foo\na = 10\ndef b():\n    return 42\n\n\nclass A: pass\n\n\n"""
+    symbols_args = ["a", "b", "A", "A,b", "A,a", "z"]
+    expected = [([], ['a']),
+                (["def b():\n    return 42\n"], []),
+                (["class A: pass\n"], []),
+                (["class A: pass\n", "def b():\n    return 42\n"], []),
+                (["class A: pass\n"], ['a']),
+                ([], ['z'])]
+    for symbols, exp in zip(symbols_args, expected):
+        nt.assert_equal(code.extract_symbols(source, symbols), exp)
+
+
+def test_extract_symbols_raises_exception_with_non_python_code():
+    source = ("=begin A Ruby program :)=end\n"
+              "def hello\n"
+              "puts 'Hello world'\n"
+              "end")
+    with nt.assert_raises(SyntaxError):
+        code.extract_symbols(source, "hello")
+
+def test_config():
+    """ test that config magic does not raise
+    can happen if Configurable init is moved too early into
+    Magics.__init__ as then a Config object will be registerd as a
+    magic.
+    """
+    ## should not raise.
+    _ip.magic('config')
+
 def test_rehashx():
     # clear up everything
     _ip = get_ipython()
-    _ip.alias_manager.alias_table.clear()
+    _ip.alias_manager.clear_aliases()
     del _ip.db['syscmdlist']
     
     _ip.magic('rehashx')
     # Practically ALL ipython development systems will have more than 10 aliases
 
-    nt.assert_true(len(_ip.alias_manager.alias_table) > 10)
-    for key, val in _ip.alias_manager.alias_table.iteritems():
+    nt.assert_true(len(_ip.alias_manager.aliases) > 10)
+    for name, cmd in _ip.alias_manager.aliases:
         # we must strip dots from alias names
-        nt.assert_not_in('.', key)
+        nt.assert_not_in('.', name)
 
     # rehashx must fill up syscmdlist
     scoms = _ip.db['syscmdlist']
@@ -245,18 +294,18 @@ def test_reset_out():
     _ip.run_cell("parrot = 'dead'", store_history=True)
     # test '%reset -f out', make an Out prompt
     _ip.run_cell("parrot", store_history=True)
-    nt.assert_true('dead' in [_ip.user_ns[x] for x in '_','__','___'])
+    nt.assert_true('dead' in [_ip.user_ns[x] for x in ('_','__','___')])
     _ip.magic('reset -f out')
-    nt.assert_false('dead' in [_ip.user_ns[x] for x in '_','__','___'])
+    nt.assert_false('dead' in [_ip.user_ns[x] for x in ('_','__','___')])
     nt.assert_equal(len(_ip.user_ns['Out']), 0)
 
 def test_reset_in():
     "Test '%reset in' magic"
     # test '%reset -f in'
     _ip.run_cell("parrot", store_history=True)
-    nt.assert_true('parrot' in [_ip.user_ns[x] for x in '_i','_ii','_iii'])
+    nt.assert_true('parrot' in [_ip.user_ns[x] for x in ('_i','_ii','_iii')])
     _ip.magic('%reset -f in')
-    nt.assert_false('parrot' in [_ip.user_ns[x] for x in '_i','_ii','_iii'])
+    nt.assert_false('parrot' in [_ip.user_ns[x] for x in ('_i','_ii','_iii')])
     nt.assert_equal(len(set(_ip.user_ns['In'])), 1)
 
 def test_reset_dhist():
@@ -341,9 +390,9 @@ def test_parse_options():
     
 def test_dirops():
     """Test various directory handling operations."""
-    # curpath = lambda :os.path.splitdrive(os.getcwdu())[1].replace('\\','/')
-    curpath = os.getcwdu
-    startdir = os.getcwdu()
+    # curpath = lambda :os.path.splitdrive(py3compat.getcwd())[1].replace('\\','/')
+    curpath = py3compat.getcwd
+    startdir = py3compat.getcwd()
     ipdir = os.path.realpath(_ip.ipython_dir)
     try:
         _ip.magic('cd "%s"' % ipdir)
@@ -487,7 +536,21 @@ def test_timeit_special_syntax():
     # cell mode test
     _ip.run_cell_magic('timeit', '-n1 -r1', '%lmagic my line2')
     nt.assert_equal(_ip.user_ns['lmagic_out'], 'my line2')
-    
+
+def test_timeit_return():
+    """
+    test wether timeit -o return object
+    """
+
+    res = _ip.run_line_magic('timeit','-n10 -r10 -o 1')
+    assert(res is not None)
+
+def test_timeit_quiet():
+    """
+    test quiet option of timeit magic
+    """
+    with tt.AssertNotPrints("loops"):
+        _ip.run_cell("%timeit -n1 -r1 -q 1")
 
 @dec.skipif(execution.profile is None)
 def test_prun_special_syntax():
@@ -771,9 +834,9 @@ def test_multiple_magics():
     foo2 = FooFoo(ip)
     mm = ip.magics_manager
     mm.register(foo1)
-    nt.assert_true(mm.magics['line']['foo'].im_self is foo1)
+    nt.assert_true(mm.magics['line']['foo'].__self__ is foo1)
     mm.register(foo2)
-    nt.assert_true(mm.magics['line']['foo'].im_self is foo2)
+    nt.assert_true(mm.magics['line']['foo'].__self__ is foo2)
 
 def test_alias_magic():
     """Test %alias_magic."""
@@ -848,7 +911,7 @@ def _run_edit_test(arg_s, exp_filename=None,
     if exp_filename is not None:
         nt.assert_equal(exp_filename, filename)
     if exp_contents is not None:
-        with io.open(filename, 'r') as f:
+        with io.open(filename, 'r', encoding='utf-8') as f:
             contents = f.read()
         nt.assert_equal(exp_contents, contents)
     if exp_lineno != -1:

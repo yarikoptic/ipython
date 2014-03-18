@@ -7,7 +7,7 @@ Parallel Magic Commands
 We provide a few IPython magic commands
 that make it a bit more pleasant to execute Python commands on the engines interactively.
 These are mainly shortcuts to :meth:`.DirectView.execute`
-and :meth:`.AsyncResult.display_outputs` methods repsectively.
+and :meth:`.AsyncResult.display_outputs` methods respectively.
 
 These magics will automatically become available when you create a Client:
 
@@ -70,7 +70,7 @@ Since engines are IPython as well, you can even run magics remotely:
 
 And once in pylab mode with the inline backend,
 you can make plots and they will be displayed in your frontend
-if it suports the inline figures (e.g. notebook or qtconsole):
+if it supports the inline figures (e.g. notebook or qtconsole):
 
 .. sourcecode:: ipython
 
@@ -141,7 +141,7 @@ independent of the defaults for the View.
 
 .. seealso::
 
-    :ref:`%pxconfig` accepts these same arguments for changing the *default*
+    :ref:`pxconfig` accepts these same arguments for changing the *default*
     values of targets/blocking for the active View.
 
 
@@ -231,6 +231,8 @@ on the engines until you do %autopx again.
 
     In [35]: %autopx
     Auto Parallel Disabled
+
+.. _pxconfig:
 
 %pxconfig
 ---------

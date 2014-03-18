@@ -27,6 +27,7 @@ from IPython.utils.text import format_screen, dedent, indent
 from IPython.testing.skipdoctest import skip_doctest
 from IPython.utils.ipstruct import Struct
 from IPython.utils.path import unquote_filename
+from IPython.utils.py3compat import unicode_type
 from IPython.utils.warn import warn, error
 
 #-----------------------------------------------------------------------------
@@ -71,7 +72,7 @@ class MagicsDisplay(object):
             magic_dict[key] = d
             for name, obj in subdict.items():
                 try:
-                    classname = obj.im_class.__name__
+                    classname = obj.__self__.__class__.__name__
                 except AttributeError:
                     classname = 'Other'
                 
@@ -113,6 +114,7 @@ class BasicMagics(Magics):
         Examples
         --------
         ::
+
           In [1]: %alias_magic t timeit
           Created `%t` as an alias for `%timeit`.
           Created `%%t` as an alias for `%%timeit`.
@@ -303,7 +305,14 @@ Currently the magic system has the following functions:""",
 
     @line_magic
     def profile(self, parameter_s=''):
-        """Print your currently active IPython profile."""
+        """Print your currently active IPython profile.
+
+        See Also
+        --------
+        prun : run code using the Python profiler
+               (:meth:`~IPython.core.magics.execution.ExecutionMagics.prun`)
+        """
+        warn("%profile is now deprecated. Please use get_ipython().profile instead.")
         from IPython.core.application import BaseIPythonApplication
         if BaseIPythonApplication.initialized():
             print(BaseIPythonApplication.instance().profile)
@@ -341,7 +350,6 @@ Currently the magic system has the following functions:""",
         if not new_scheme:
             raise UsageError(
                 "%colors: you must specify a color scheme. See '%colors?'")
-            return
         # local shortcut
         shell = self.shell
 
@@ -600,7 +608,7 @@ Defaulting color scheme to 'NoColor'"""
              'format. The filename argument gives the name of the source file.'
     )
     @magic_arguments.argument(
-        'filename', type=unicode,
+        'filename', type=unicode_type,
         help='Notebook name or filename'
     )
     @line_magic

@@ -1,5 +1,6 @@
 """Tests for debugging machinery.
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012, The IPython Development Team.
 #
@@ -36,7 +37,7 @@ class _FakeInput(object):
 
     def readline(self):
         line = next(self.lines)
-        print line
+        print(line)
         return line+'\n'
 
 class PdbTestInput(object):
@@ -57,7 +58,10 @@ class PdbTestInput(object):
 #-----------------------------------------------------------------------------
 
 def test_longer_repr():
-    from repr import repr as trepr
+    try:
+        from reprlib import repr as trepr  # Py 3
+    except ImportError:
+        from repr import repr as trepr  # Py 2
     
     a = '1234567890'* 7
     ar = "'1234567890123456789012345678901234567890123456789012345678901234567890'"
@@ -85,6 +89,8 @@ def test_ipdb_magics():
     ...     """Docstring for example_function."""
     ...     pass
 
+    >>> old_trace = sys.gettrace()
+
     Create a function which triggers ipdb.
 
     >>> def trigger_ipdb():
@@ -108,22 +114,27 @@ def test_ipdb_magics():
     ipdb> pdef example_function
      example_function(x, y, z='hello')
      ipdb> pdoc ExampleClass
-    Class Docstring:
+    Class docstring:
         Docstring for ExampleClass.
-    Constructor Docstring:
+    Init docstring:
         Docstring for ExampleClass.__init__
     ipdb> pinfo a
-    Type:       ExampleClass
-    String Form:ExampleClass()
-    Namespace:  Locals
-    File:       ...
-    Docstring:  Docstring for ExampleClass.
-    Constructor Docstring:Docstring for ExampleClass.__init__
+    Type:           ExampleClass
+    String form:    ExampleClass()
+    Namespace:      Local...
+    Docstring:      Docstring for ExampleClass.
+    Init docstring: Docstring for ExampleClass.__init__
     ipdb> continue
+    
+    Restore previous trace function, e.g. for coverage.py    
+    
+    >>> sys.settrace(old_trace)
     '''
 
 def test_ipdb_magics2():
     '''Test ipdb with a very short function.
+    
+    >>> old_trace = sys.gettrace()
 
     >>> def bar():
     ...     pass
@@ -139,4 +150,8 @@ def test_ipdb_magics2():
     ----> 2    pass
     <BLANKLINE>
     ipdb> continue
+    
+    Restore previous trace function, e.g. for coverage.py    
+    
+    >>> sys.settrace(old_trace)
     '''
