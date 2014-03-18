@@ -22,6 +22,7 @@ Build-Depends-Indep: graphviz,
                      python-sphinx,
                      python-wxgtk2.8,
                      python-zmq (>= 2.1.4),
+                     python-tornado (>= 3.1.0~),
                      xauth,
                      xvfb
 X-Python-Version: >= 2.6
@@ -40,7 +41,7 @@ Depends: python-argparse,
          python-simplegeneric,
          ${misc:Depends},
          ${python:Depends}
-Recommends: python-tornado (>= 2.1.0~),
+Recommends: python-tornado (>= 3.1.0~),
             python-pygments,
             python-qt4,
             python-zmq,
