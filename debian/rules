@@ -2,6 +2,9 @@
 export DH_VERBOSE=2
 PYVERS = $(shell pyversions -rv)
 
+Vsuf=2x
+VSUF=2X
+
 override_dh_compress:
 	# make sure the documentation stays usable.
 	dh_compress -Xhtml/
@@ -31,7 +34,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 endif
 
 override_dh_install:
-	dh_install -pipython2x \
+	dh_install -pipython$(Vsuf) \
 		--exclude="IPython/deathrow/" \
 		--exclude="IPython/quarantine/"
 
@@ -60,15 +63,15 @@ override_dh_install:
 	# add wrapper scripts for all python versions
 	set -e ;\
 	firstpyver="" ;\
-	mkdir -p $(CURDIR)/debian/ipython2x/usr/share/man/man1/; \
+	mkdir -p $(CURDIR)/debian/ipython$(Vsuf)/usr/share/man/man1/; \
 	for pyvers in $(PYVERS); do \
 	    if [ "$${firstpyver}" = "" ]; then \
-	        install -m 755 debian/ipython2x.sh $(CURDIR)/debian/ipython2x/usr/bin/ipython2x$${pyvers} ;\
+	        install -m 755 debian/ipython$(Vsuf).sh $(CURDIR)/debian/ipython$(Vsuf)/usr/bin/ipython$(Vsuf)$${pyvers} ;\
 	        firstpyver="$$pyvers" ;\
 	    else \
-	        ln -sf ipython2x$${firstpyver} $(CURDIR)/debian/ipython2x/usr/bin/ipython2x$${pyvers} ;\
+	        ln -sf ipython$(Vsuf)$${firstpyver} $(CURDIR)/debian/ipython$(Vsuf)/usr/bin/ipython$(Vsuf)$${pyvers} ;\
 	    fi ;\
-	    ln -sf ipython2x.1.gz $(CURDIR)/debian/ipython2x/usr/share/man/man1/ipython2x$${pyvers}.1.gz ;\
+	    ln -sf ipython$(Vsuf).1.gz $(CURDIR)/debian/ipython$(Vsuf)/usr/share/man/man1/ipython$(Vsuf)$${pyvers}.1.gz ;\
 	done
 
 	# change permission on scripts
@@ -76,59 +79,59 @@ override_dh_install:
 
 override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
-	dh_installdocs -pipython2x
-	dh_installdocs -pipython2x-parallel --link-doc=ipython2x
-	dh_installdocs -pipython2x-notebook --link-doc=ipython2x
-	dh_installdocs -pipython2x-qtconsole --link-doc=ipython2x
-	dh_installdocs -pipython2x-doc --link-doc=ipython2x
+	dh_installdocs -pipython$(Vsuf)
+	dh_installdocs -pipython$(Vsuf)-parallel --link-doc=ipython$(Vsuf)
+	dh_installdocs -pipython$(Vsuf)-notebook --link-doc=ipython$(Vsuf)
+	dh_installdocs -pipython$(Vsuf)-qtconsole --link-doc=ipython$(Vsuf)
+	dh_installdocs -pipython$(Vsuf)-doc --link-doc=ipython$(Vsuf)
 endif
 
 override_dh_installexamples:
-	dh_installexamples -pipython2x
+	dh_installexamples -pipython$(Vsuf)
 	# yoh: disabled for now since at this point link is dangling and do not want more mess with renamings
-	# dh_installexamples -pipython2x-parallel
+	# dh_installexamples -pipython$(Vsuf)-parallel
 
 override_dh_python2:
 	: # and here we are
 	: # The Module
 	{ /usr/bin/find debian/ipy* -name IPython | \
 		while read d; do \
-			mkdir $${d}2X; \
-			mv $$d $${d}2X; \
-			echo $$d | grep -q 'debian/ipython2x/' && \
-				cp $(CURDIR)/debian/c__init__.py $${d}2X/__init__.py || :; \
+			mkdir $${d}$(VSUF); \
+			mv $$d $${d}$(VSUF); \
+			echo $$d | grep -q 'debian/ipython$(Vsuf)/' && \
+				cp $(CURDIR)/debian/c__init__.py $${d}$(VSUF)/__init__.py || :; \
 		 done; }
 	: # misc dirs
 	{ /usr/bin/find debian/ipy* -mindepth 2 -name ipython -type d | \
-		while read d; do mv $$d $${d}1x; done; }
+		while read d; do mv $$d $${d}$(Vsuf); done; }
 	: # man pages
 	{ /usr/bin/find debian/ipy* -path *man1/\* | \
-		while read d; do mv $$d $${d%.1}1x.1; done; }
+		while read d; do mv $$d $${d%.1}$(Vsuf).1; done; }
 	: # desktop files
 	{ /usr/bin/find debian/ipy* -path *.desktop | \
 		while read d; do \
-			sed -i -e 's,Exec=ipython ,Exec=ipython2x ,g' $$d; \
-			mv $$d $${d%.desktop}1x.desktop; \
+			sed -i -e 's,Exec=ipython ,Exec=ipython$(Vsuf) ,g' $$d; \
+			mv $$d $${d%.desktop}$(Vsuf).desktop; \
 		done; }
 	: # emacs files
 	{ /usr/bin/find debian/ipy* -path *.el | \
-		while read d; do mv $$d $${d%.el}1x.el}; done; }
+		while read d; do mv $$d $${d%.el}$(Vsuf).el}; done; }
 	: # binaries
 	{ /usr/bin/find debian/ipy* -path *bin/\* | \
-		grep -v '1x[.\d]*$$' | \
-		while read d; do mv $$d $${d}1x; done; }
-	: # Adjust all wrappers to import IPython2X first
+		grep -v '$(Vsuf)[.\d]*$$' | \
+		while read d; do mv $$d $${d}$(Vsuf); done; }
+	: # Adjust all wrappers to import IPython$(VSUF) first
 	find $(CURDIR)/debian/ipy*/usr/bin -type f \
-	| xargs sed -i -e 's,\(from IPython[^1].*\),import IPython2X; \1,g'
+	| xargs sed -i -e 's,\(from IPython[^1].*\),import IPython$(VSUF); \1,g'
 	: # call actual dh_python2
 	dh_python2
 	: # and remove .egg-info since they are anyways somewhat incorrect now and I do not think they are mandatory here fro ipython
-	find ./debian/ipython2x -iname *.egg-info -delete
+	find ./debian/ipython$(Vsuf) -iname *.egg-info -delete
 
 get-orig-source-git:
 	git fetch origin
 	uver=$$(git describe origin/master | sed -e 's,rel-\([.0-9]*\)-\([0-9]*-g.*\),\1+git\2,g') && \
-	git archive --prefix=ipython2x-$$uver/ --format=tar origin/master \
-	| gzip >| ../tarballs/ipython2x_$$uver.orig.tar.gz && \
+	git archive --prefix=ipython$(Vsuf)-$$uver/ --format=tar origin/master \
+	| gzip >| ../tarballs/ipython$(Vsuf)_$$uver.orig.tar.gz && \
 	dch --noconf --newversion $$uver-1 -D neurodebian --force-distribution "Fresh upstream snapshot" && \
 	git commit -m "Changelog for a new snapshot revision $$uver" debian/changelog
