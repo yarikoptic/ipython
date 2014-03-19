@@ -1,6 +1,8 @@
 ipython2x (2.0.0~b1+git28-gc2ab228-1) neurodebian; urgency=low
 
   * Snapshot of upstream to be cooked soon flashy release
+  * debian/control
+    - python-numpydoc into build-depends
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Mon, 17 Mar 2014 23:19:39 -0400
 
