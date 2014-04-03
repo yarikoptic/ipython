@@ -80,16 +80,10 @@ override_dh_install:
 override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
 	dh_installdocs -pipython$(Vsuf)
-	dh_installdocs -pipython$(Vsuf)-parallel --link-doc=ipython$(Vsuf)
-	dh_installdocs -pipython$(Vsuf)-notebook --link-doc=ipython$(Vsuf)
-	dh_installdocs -pipython$(Vsuf)-qtconsole --link-doc=ipython$(Vsuf)
-	dh_installdocs -pipython$(Vsuf)-doc --link-doc=ipython$(Vsuf)
 endif
 
 override_dh_installexamples:
 	dh_installexamples -pipython$(Vsuf)
-	# yoh: disabled for now since at this point link is dangling and do not want more mess with renamings
-	# dh_installexamples -pipython$(Vsuf)-parallel
 
 override_dh_python2:
 	: # and here we are

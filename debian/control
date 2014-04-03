@@ -70,38 +70,6 @@ Description: enhanced interactive Python shell
  It provides IPython2X module thus not conflicting with system-wide 
  installed IPython
 
-Package: ipython2x-qtconsole
-Architecture: all
-Priority: extra
-Depends: ipython2x (>= 0.13.1~git33-gcfc5692-2~),
-         ${misc:Depends},
-Description: enhanced interactive Python shell -- notebook dummy package
- This is a dummy package depending on ipython2x which ships
- qt console functionality inside.  It is made so to stay in line to
- modularization of the official ipython package in Debian.  There is no
- real good reason to install this package.
-
-Package: ipython2x-parallel
-Architecture: all
-Priority: extra
-Depends: ipython2x (>= 0.13.1~git33-gcfc5692-2~),
-         ${misc:Depends},
-Section: oldlibs
-Description: enhanced interactive Python shell
- This is a transitional package and can be safely removed
- after the installation is complete.
-
-Package: ipython2x-notebook
-Architecture: all
-Priority: extra
-Depends: ipython2x (>= 0.13.1~git33-gcfc5692-2~),
-         ${misc:Depends},
-Description: enhanced interactive Python shell -- notebook dummy package
- This is a dummy package depending on ipython2x which ships
- notebook functionality inside.  It is made so to stay in line to
- modularization of official ipython package in Debian.  There is no
- real good reason to install this package.
-
 Package: ipython2x-doc
 Section: doc
 Architecture: all
