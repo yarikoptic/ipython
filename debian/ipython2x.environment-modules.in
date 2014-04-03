@@ -1,0 +1,25 @@
+#%Module1.0#####################################################################
+##
+## IPython 2.x modulefile
+##
+proc ModulesHelp { } {
+        global version
+
+        puts stderr "\tLoads the IPython $UVERSION environment.\n"
+        puts stderr "\tIt will adjust PATH and PYTHONPATH so that this version "
+        puts stderr "\tbecome available in your environment.\n"
+        puts stderr "\tVersion $version\n"
+}
+
+module-whatis   "enable IPython $UVERSION"
+
+# for Tcl script use only
+set     version      "$UVERSION"
+
+# there is a problem with having __ I believe so for now hardcoded
+#set IPYPATH [exec python -c "import IPython2X; print IPython2X.__path__[0]" | grep -e "/"]
+set IPYPATH  /usr/lib/python2.7/dist-packages/IPython2X
+
+prepend-path PATH        /usr/share/ipython2x/bin/
+prepend-path MANPATH     /usr/share/ipython2x/man/
+prepend-path PYTHONPATH  $IPYPATH

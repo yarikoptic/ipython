@@ -3,6 +3,8 @@ ipython2x (2.0.0+git8-gee204ae-1) neurodebian; urgency=low
   * Snapshot of upstream to be cooked soon flashy release
   * debian/control
     - python-numpydoc into build-depends
+    - provide modulesfile for the IPython and thus recommend
+      environment-modules
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Wed, 02 Apr 2014 22:32:33 -0400
 
