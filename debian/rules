@@ -80,6 +80,7 @@ override_dh_install:
 override_dh_installdocs:
 ifeq (,$(filter nodocs,$(DEB_BUILD_OPTIONS)))
 	dh_installdocs -pipython$(Vsuf)
+	dh_installdocs -pipython$(Vsuf)-doc --link-doc=ipython$(Vsuf)
 endif
 
 override_dh_installexamples:
