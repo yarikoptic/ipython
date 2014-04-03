@@ -85,6 +85,9 @@ endif
 override_dh_installexamples:
 	dh_installexamples -pipython$(Vsuf)
 
+override_dh_installdirs:
+	dh_installdirs /usr/share/ipython$(Vsuf)/bin /usr/share/ipython$(Vsuf)/man
+
 override_dh_python2:
 	: # and here we are
 	: # The Module
@@ -98,9 +101,12 @@ override_dh_python2:
 	: # misc dirs
 	{ /usr/bin/find debian/ipy* -mindepth 2 -name ipython -type d | \
 		while read d; do mv $$d $${d}$(Vsuf); done; }
-	: # man pages
+	: # man pages -- move under share/ipythonVx/man and symlink back with suffix
 	{ /usr/bin/find debian/ipy* -path *man1/\* | \
-		while read d; do mv $$d $${d%.1}$(Vsuf).1; done; }
+		while read d; do \
+			mv $$d debian/ipython${Vsuf}/usr/share/ipython$(Vsuf)/man/; \
+			ln -sf /usr/share/ipython$(Vsuf)/man/$$(basename $$d) $${d%.1}$(Vsuf).1; \
+			done; }
 	: # desktop files
 	{ /usr/bin/find debian/ipy* -path *.desktop | \
 		while read d; do \
@@ -110,10 +116,13 @@ override_dh_python2:
 	: # emacs files
 	{ /usr/bin/find debian/ipy* -path *.el | \
 		while read d; do mv $$d $${d%.el}$(Vsuf).el}; done; }
-	: # binaries
+	: # binaries -- two copies -- under share/ipythonVx/bin unadjusted and under /usr/bin adjusted
 	{ /usr/bin/find debian/ipy* -path *bin/\* | \
 		grep -v '$(Vsuf)[.\d]*$$' | \
-		while read d; do mv $$d $${d}$(Vsuf); done; }
+		while read d; do \
+			cp -p $$d debian/ipython${Vsuf}/usr/share/ipython$(Vsuf)/bin; \
+			mv $$d $${d}$(Vsuf); \
+		done; }
 	: # Adjust all wrappers to import IPython$(VSUF) first
 	find $(CURDIR)/debian/ipy*/usr/bin -type f \
 	| xargs sed -i -e 's,\(from IPython[^1].*\),import IPython$(VSUF); \1,g'
