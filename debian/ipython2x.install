@@ -1,4 +1,3 @@
-/usr/bin/*
-/usr/lib/python2.*
+/usr/*
 examples/core/ipython.desktop usr/share/applications/
 examples/core/ipython-qtconsole.desktop usr/share/applications/
