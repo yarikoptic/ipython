@@ -19,8 +19,8 @@ test suite.
 from __future__ import print_function
 
 import argparse
+import json
 import multiprocessing.pool
-from multiprocessing import Process, Queue
 import os
 import shutil
 import signal
@@ -28,7 +28,7 @@ import sys
 import subprocess
 import time
 
-from .iptest import have, test_group_names as py_test_group_names, test_sections
+from .iptest import have, test_group_names as py_test_group_names, test_sections, StreamCapturer
 from IPython.utils.path import compress_user
 from IPython.utils.py3compat import bytes_to_str
 from IPython.utils.sysinfo import get_sys_info
@@ -50,27 +50,45 @@ class TestController(object):
     process = None
     #: str, process stdout+stderr
     stdout = None
-    #: bool, whether to capture process stdout & stderr
-    buffer_output = False
 
     def __init__(self):
         self.cmd = []
         self.env = {}
         self.dirs = []
 
-    def launch(self):
+    def setup(self):
+        """Create temporary directories etc.
+        
+        This is only called when we know the test group will be run. Things
+        created here may be cleaned up by self.cleanup().
+        """
+        pass
+
+    def launch(self, buffer_output=False):
         # print('*** ENV:', self.env)  # dbg
         # print('*** CMD:', self.cmd)  # dbg
         env = os.environ.copy()
         env.update(self.env)
-        output = subprocess.PIPE if self.buffer_output else None
-        stdout = subprocess.STDOUT if self.buffer_output else None
+        output = subprocess.PIPE if buffer_output else None
+        stdout = subprocess.STDOUT if buffer_output else None
         self.process = subprocess.Popen(self.cmd, stdout=output,
                 stderr=stdout, env=env)
 
     def wait(self):
         self.stdout, _ = self.process.communicate()
         return self.process.returncode
+
+    def print_extra_info(self):
+        """Print extra information about this test run.
+        
+        If we're running in parallel and showing the concise view, this is only
+        called if the test group fails. Otherwise, it's called before the test
+        group is started.
+        
+        The base implementation does nothing, but it can be overridden by
+        subclasses.
+        """
+        return
 
     def cleanup_process(self):
         """Cleanup on exit by killing any leftover processes."""
@@ -109,13 +127,16 @@ class PyTestController(TestController):
     #: str, Python command to execute in subprocess
     pycmd = None
 
-    def __init__(self, section):
+    def __init__(self, section, options):
         """Create new test runner."""
         TestController.__init__(self)
         self.section = section
         # pycmd is put into cmd[2] in PyTestController.launch()
         self.cmd = [sys.executable, '-c', None, section]
         self.pycmd = "from IPython.testing.iptest import run_iptest; run_iptest()"
+        self.options = options
+
+    def setup(self):
         ipydir = TemporaryDirectory()
         self.dirs.append(ipydir)
         self.env['IPYTHONDIR'] = ipydir.name
@@ -124,6 +145,14 @@ class PyTestController(TestController):
         self.env['IPTEST_WORKING_DIR'] = workingdir.name
         # This means we won't get odd effects from our own matplotlib config
         self.env['MPLCONFIGDIR'] = workingdir.name
+
+        # From options:
+        if self.options.xunit:
+            self.add_xunit()
+        if self.options.coverage:
+            self.add_coverage()
+        self.env['IPTEST_SUBPROC_STREAMS'] = self.options.subproc_streams
+        self.cmd.extend(self.options.extra_args)
 
     @property
     def will_run(self):
@@ -155,9 +184,9 @@ class PyTestController(TestController):
         self.env['COVERAGE_PROCESS_START'] = config_file
         self.pycmd = "import coverage; coverage.process_startup(); " + self.pycmd
 
-    def launch(self):
+    def launch(self, buffer_output=False):
         self.cmd[2] = self.pycmd
-        super(PyTestController, self).launch()
+        super(PyTestController, self).launch(buffer_output=buffer_output)
 
 js_prefix = 'js/'
 
@@ -177,62 +206,91 @@ class JSController(TestController):
         """Create new test runner."""
         TestController.__init__(self)
         self.section = section
-
-
-    def launch(self):
-        self.ipydir = TemporaryDirectory()
-        self.nbdir = TemporaryDirectory()
-        print("Running %s tests in directory: %r" % (self.section, self.nbdir.name))
-        os.makedirs(os.path.join(self.nbdir.name, os.path.join(u'sub ∂ir1', u'sub ∂ir 1a')))
-        os.makedirs(os.path.join(self.nbdir.name, os.path.join(u'sub ∂ir2', u'sub ∂ir 1b')))
-        self.dirs.append(self.ipydir)
-        self.dirs.append(self.nbdir)
-        
-        # start the ipython notebook, so we get the port number
-        self._init_server()
         js_test_dir = get_js_test_dir()
         includes = '--includes=' + os.path.join(js_test_dir,'util.js')
         test_cases = os.path.join(js_test_dir, self.section[len(js_prefix):])
-        port = '--port=' + str(self.server_port)
-        self.cmd = ['casperjs', 'test', port, includes, test_cases]
-        super(JSController, self).launch()
+        self.cmd = ['casperjs', 'test', includes, test_cases]
+
+    def setup(self):
+        self.ipydir = TemporaryDirectory()
+        self.nbdir = TemporaryDirectory()
+        self.dirs.append(self.ipydir)
+        self.dirs.append(self.nbdir)
+        os.makedirs(os.path.join(self.nbdir.name, os.path.join(u'sub ∂ir1', u'sub ∂ir 1a')))
+        os.makedirs(os.path.join(self.nbdir.name, os.path.join(u'sub ∂ir2', u'sub ∂ir 1b')))
+        
+        # start the ipython notebook, so we get the port number
+        self.server_port = 0
+        self._init_server()
+        if self.server_port:
+            self.cmd.append("--port=%i" % self.server_port)
+        else:
+            # don't launch tests if the server didn't start
+            self.cmd = [sys.executable, '-c', 'raise SystemExit(1)']
+    
+    def print_extra_info(self):
+        print("Running tests with notebook directory %r" % self.nbdir.name)
 
     @property
     def will_run(self):
-        return all(have[a] for a in ['zmq', 'tornado', 'jinja2', 'casperjs'])
+        return all(have[a] for a in ['zmq', 'tornado', 'jinja2', 'casperjs', 'sqlite3'])
 
     def _init_server(self):
         "Start the notebook server in a separate process"
-        self.queue = q = Queue()
-        self.server = Process(target=run_webapp, args=(q, self.ipydir.name, self.nbdir.name))
-        self.server.start()
-        self.server_port = q.get()
+        self.server_command = command = [sys.executable,
+            '-m', 'IPython.html',
+            '--no-browser',
+            '--ipython-dir', self.ipydir.name,
+            '--notebook-dir', self.nbdir.name,
+        ]
+        # ipc doesn't work on Windows, and darwin has crazy-long temp paths,
+        # which run afoul of ipc's maximum path length.
+        if sys.platform.startswith('linux'):
+            command.append('--KernelManager.transport=ipc')
+        self.stream_capturer = c = StreamCapturer()
+        c.start()
+        self.server = subprocess.Popen(command, stdout=c.writefd, stderr=subprocess.STDOUT)
+        self.server_info_file = os.path.join(self.ipydir.name,
+            'profile_default', 'security', 'nbserver-%i.json' % self.server.pid
+        )
+        self._wait_for_server()
+    
+    def _wait_for_server(self):
+        """Wait 30 seconds for the notebook server to start"""
+        for i in range(300):
+            if self.server.poll() is not None:
+                return self._failed_to_start()
+            if os.path.exists(self.server_info_file):
+                self._load_server_info()
+                return
+            time.sleep(0.1)
+        print("Notebook server-info file never arrived: %s" % self.server_info_file,
+            file=sys.stderr
+        )
+    
+    def _failed_to_start(self):
+        """Notebook server exited prematurely"""
+        captured = self.stream_capturer.get_buffer().decode('utf-8', 'replace')
+        print("Notebook failed to start: ", file=sys.stderr)
+        print(self.server_command)
+        print(captured, file=sys.stderr)
+    
+    def _load_server_info(self):
+        """Notebook server started, load connection info from JSON"""
+        with open(self.server_info_file) as f:
+            info = json.load(f)
+        self.server_port = info['port']
 
     def cleanup(self):
-        self.server.terminate()
-        self.server.join()
+        try:
+            self.server.terminate()
+        except OSError:
+            # already dead
+            pass
+        self.server.wait()
+        self.stream_capturer.halt()
         TestController.cleanup(self)
 
-def run_webapp(q, ipydir, nbdir, loglevel=0):
-    """start the IPython Notebook, and pass port back to the queue"""
-    import os
-    import IPython.html.notebookapp as nbapp
-    import sys
-    sys.stderr = open(os.devnull, 'w')
-    server = nbapp.NotebookApp()
-    args = ['--no-browser']
-    args.extend(['--ipython-dir', ipydir,
-                 '--notebook-dir', nbdir,
-                 '--log-level', str(loglevel),
-    ])
-    # ipc doesn't work on Windows, and darwin has crazy-long temp paths,
-    # which run afoul of ipc's maximum path length.
-    if sys.platform.startswith('linux'):
-        args.append('--KernelManager.transport=ipc')
-    server.initialize(args)
-    # communicate the port number to the parent process
-    q.put(server.port)
-    server.start()
 
 def prepare_controllers(options):
     """Returns two lists of TestController instances, those to run, and those
@@ -253,32 +311,34 @@ def prepare_controllers(options):
             test_sections['parallel'].enabled = False
 
     c_js = [JSController(name) for name in js_testgroups]
-    c_py = [PyTestController(name) for name in py_testgroups]
-
-    configure_py_controllers(c_py, xunit=options.xunit,
-            coverage=options.coverage, subproc_streams=options.subproc_streams,
-            extra_args=options.extra_args)
+    c_py = [PyTestController(name, options) for name in py_testgroups]
 
     controllers = c_py + c_js
     to_run = [c for c in controllers if c.will_run]
     not_run = [c for c in controllers if not c.will_run]
     return to_run, not_run
 
-def configure_py_controllers(controllers, xunit=False, coverage=False,
-                             subproc_streams='capture', extra_args=()):
-    """Apply options for a collection of TestController objects."""
-    for controller in controllers:
-        if xunit:
-            controller.add_xunit()
-        if coverage:
-            controller.add_coverage()
-        controller.env['IPTEST_SUBPROC_STREAMS'] = subproc_streams
-        controller.cmd.extend(extra_args)
-
-def do_run(controller):
+def do_run(controller, buffer_output=True):
+    """Setup and run a test controller.
+    
+    If buffer_output is True, no output is displayed, to avoid it appearing
+    interleaved. In this case, the caller is responsible for displaying test
+    output on failure.
+    
+    Returns
+    -------
+    controller : TestController
+      The same controller as passed in, as a convenience for using map() type
+      APIs.
+    exitcode : int
+      The exit code of the test subprocess. Non-zero indicates failure.
+    """
     try:
         try:
-            controller.launch()
+            controller.setup()
+            if not buffer_output:
+                controller.print_extra_info()
+            controller.launch(buffer_output=buffer_output)
         except Exception:
             import traceback
             traceback.print_exc()
@@ -365,10 +425,6 @@ def run_iptestall(options):
     extra_args : list
       Extra arguments to pass to the test subprocesses, e.g. '-v'
     """
-    if options.fast != 1:
-        # If running in parallel, capture output so it doesn't get interleaved
-        TestController.buffer_output = True
-
     to_run, not_run = prepare_controllers(options)
 
     def justify(ltext, rtext, width=70, fill='-'):
@@ -384,9 +440,9 @@ def run_iptestall(options):
     if options.fast == 1:
         # This actually means sequential, i.e. with 1 job
         for controller in to_run:
-            print('IPython test group:', controller.section)
+            print('Test group:', controller.section)
             sys.stdout.flush()  # Show in correct order when output is piped
-            controller, res = do_run(controller)
+            controller, res = do_run(controller, buffer_output=False)
             if res:
                 failed.append(controller)
                 if res == -signal.SIGINT:
@@ -400,8 +456,9 @@ def run_iptestall(options):
             pool = multiprocessing.pool.ThreadPool(options.fast)
             for (controller, res) in pool.imap_unordered(do_run, to_run):
                 res_string = 'OK' if res == 0 else 'FAILED'
-                print(justify('IPython test group: ' + controller.section, res_string))
+                print(justify('Test group: ' + controller.section, res_string))
                 if res:
+                    controller.print_extra_info()
                     print(bytes_to_str(controller.stdout))
                     failed.append(controller)
                     if res == -signal.SIGINT:
@@ -411,7 +468,7 @@ def run_iptestall(options):
             return
 
     for controller in not_run:
-        print(justify('IPython test group: ' + controller.section, 'NOT RUN'))
+        print(justify('Test group: ' + controller.section, 'NOT RUN'))
 
     t_end = time.time()
     t_tests = t_end - t_start
@@ -485,7 +542,8 @@ argparser.add_argument('testgroups', nargs='*',
 argparser.add_argument('--all', action='store_true',
                     help='Include slow tests not run by default.')
 argparser.add_argument('-j', '--fast', nargs='?', const=None, default=1, type=int,
-                    help='Run test sections in parallel.')
+                    help='Run test sections in parallel. This starts as many '
+                    'processes as you have cores, or you can specify a number.')
 argparser.add_argument('--xunit', action='store_true',
                     help='Produce Xunit XML results')
 argparser.add_argument('--coverage', nargs='?', const=True, default=False,
