@@ -1,3 +1,2 @@
 /usr/*
-examples/core/ipython.desktop usr/share/applications/
-examples/core/ipython-qtconsole.desktop usr/share/applications/
+examples/*/*.desktop usr/share/applications/
