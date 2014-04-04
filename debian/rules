@@ -120,8 +120,8 @@ override_dh_python2:
 	: # desktop files
 	{ /usr/bin/find debian/ipy* -path *.desktop | \
 		while read d; do \
-			sed -i -e 's,Exec=ipython ,Exec=ipython$(Vsuf) ,g' $$d; \
-			mv $$d $${d%.desktop}$(Vsuf).desktop; \
+			sed -i -e 's,Exec=ipython ,Exec=ipython$(Vsuf) ,g' "$$d"; \
+			mv "$$d" "$${d%.desktop}$(Vsuf).desktop"; \
 		done; }
 	: # emacs files
 	{ /usr/bin/find debian/ipy* -path *.el | \
