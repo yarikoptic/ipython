@@ -46,7 +46,8 @@ Recommends: python-tornado (>= 3.1.0~),
             python-pygments,
             python-qt4,
             python-zmq,
-            python-matplotlib
+            python-matplotlib,
+            environment-modules,
 Conflicts: ipython-common, python2.3-ipython, python2.4-ipython
 Replaces: ipython-common, python2.3-ipython, python2.4-ipython
 Suggests: ipython2x-doc,
